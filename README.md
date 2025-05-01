@@ -9,6 +9,11 @@ system logs, unit dependencies, historical trends, and process activity to provi
 a comprehensive health assessment. It leverages native Linux features, optional
 ML anomaly detection, LLM synthesis, and eBPF tracing for deep insights.
 
+**WORK IN PROGRESS**
+The anomoly detection tends to work but is still under active development and tuning.
+
+The LLM analysis and overall health check does tend to work as expected.
+
 ![Screenshot](screenshot/example.png)
 
 **For exhaustive details on configuration, options, and interpretation, please see the `MAN.md` file.**
