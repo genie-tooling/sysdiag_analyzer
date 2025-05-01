@@ -1,0 +1,42 @@
+# Example configuration file for sysdiag-analyzer
+# Copy this to /etc/sysdiag-analyzer/config.toml (system-wide)
+# or ~/.config/sysdiag-analyzer/config.toml (user-specific)
+# User config overrides system config.
+
+# --- LLM Analysis Configuration (Optional) ---
+[llm]
+# Specify the provider. Currently supported: "ollama"
+# provider = "ollama"
+
+# Model name available in your chosen provider instance (e.g., Ollama)
+# Required if provider is set.
+# model = "llama3:latest"
+
+# --- Ollama Specific Settings (Optional) ---
+# Override Ollama API host if not default (http://localhost:11434)
+# host = "http://192.168.1.100:11434"
+
+# --- General LLM Generation Parameters (Optional) ---
+# temperature = 0.2 # Controls randomness (0.0 = deterministic, >1.0 = more random)
+# max_tokens = 1024 # Max number of tokens to generate in the completion
+# context_window = 4096 # Model's context window size (informational for some providers)
+
+# --- History Persistence Configuration (Optional) ---
+[history]
+# Directory to store analysis reports. Requires write permissions.
+# directory = "/var/lib/sysdiag-analyzer/history"
+
+# Maximum number of report files to keep. Older files will be deleted.
+# max_files = 50
+
+# --- ML Model Configuration (Optional) ---
+[models]
+# Directory to store trained ML models. Requires write permissions for retrain-ml.
+# directory = "/var/lib/sysdiag-analyzer/models"
+
+# Isolation Forest 'contamination' parameter (expected proportion of outliers).
+# 'auto' usually works well. Can be a float between 0 and 0.5.
+# anomaly_contamination = "auto"
+
+# Minimum number of historical data points required per unit to train a model.
+# min_samples_train = 10

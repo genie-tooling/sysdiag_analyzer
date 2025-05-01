@@ -1,0 +1,46 @@
+name: Python Package CI
+
+on:
+  push:
+    branches: [ "main", "master" ] # Adjust branch names if necessary
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.11"] # Test against min and a recent version
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install System Dependencies
+      run: |
+        sudo apt-get update -y
+        # Dependencies for dbus-python, cysystemd
+        sudo apt-get install -y --no-install-recommends \
+          libdbus-1-dev python3-dev gcc pkg-config libsystemd-dev
+        # Dependencies for BCC (eBPF) - May still have issues without matching kernel headers
+        # Note: Running actual eBPF tests might fail reliably in standard GH runners
+        # Consider skipping eBPF tests tagged with @pytest.mark.needs_ebpf in CI if they fail
+        sudo apt-get install -y --no-install-recommends \
+          bpfcc-tools libbpfcc-dev linux-headers-generic # Attempt generic headers
+
+    - name: Install Python Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # Install the package with development extras (includes test deps and optionals)
+        pip install -e ".[dev]"
+
+    - name: Run tests with pytest
+      run: |
+        pytest
