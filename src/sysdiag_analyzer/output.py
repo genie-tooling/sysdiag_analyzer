@@ -4,6 +4,7 @@
 import datetime
 import json
 import logging
+import psutil
 from dataclasses import asdict
 from typing import Any, List, Optional  # Added Dict
 
@@ -1020,7 +1021,6 @@ def format_llm_report(result: Optional[LLMAnalysisResult], console: Console) -> 
                 Panel(panel_content, title=title, border_style=border_style, expand=True)
             )
 
-
 def format_ebpf_report(result: Optional[EBPFAnalysisResult], console: Console) -> None:
     """Formats and prints the eBPF Analysis results using Rich."""
     log.debug(f"format_ebpf_report called with result object: {result is not None}")
@@ -1029,6 +1029,16 @@ def format_ebpf_report(result: Optional[EBPFAnalysisResult], console: Console) -
     if not result:
         log.debug("Skipping eBPF report formatting (no result data).")
         return
+
+    # --- BUG FIX START ---
+    # Get the system boot time once.
+    try:
+        boot_time_unix = psutil.boot_time()
+    except Exception as e:
+        log.error(f"Could not get system boot time from psutil: {e}. eBPF timestamps will be incorrect.")
+        # Fallback to a value that will make it obvious something is wrong, but won't crash.
+        boot_time_unix = 0.0
+    # --- BUG FIX END ---
 
     output_elements: List[Any] = []
     if result.error:
@@ -1040,74 +1050,38 @@ def format_ebpf_report(result: Optional[EBPFAnalysisResult], console: Console) -
     output_elements.append(f"[dim]Events Captured: Execs={exec_count}, Exits={exit_count}[/dim]")
 
     if not result.exec_events and not result.exit_events and not result.error:
-        output_elements.append(
-            "\n[dim]No eBPF process events captured during analysis window.[/dim]"
-        )
+        output_elements.append("\n[dim]No eBPF process events captured during analysis window.[/dim]")
     else:
-        if result.error:
-            output_elements.append("")  # Add separator
-
         if result.exec_events:
-            exec_table = Table(
-                title=f"Recent Process Executions (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})",
-                show_header=True,
-                header_style="bold blue",
-                expand=True,
-            )
-            exec_table.add_column("Timestamp", style="dim", width=26)
-            exec_table.add_column("PID", style="green", width=8)
-            exec_table.add_column("PPID", style="blue", width=8)
-            exec_table.add_column("Comm", style="cyan", width=16)
-            exec_table.add_column("Filename", style="magenta")
+            exec_table = Table(title=f"Recent Process Executions (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})", show_header=True, header_style="bold blue", expand=True)
+            exec_table.add_column("Timestamp", style="dim", width=26); exec_table.add_column("PID", style="green", width=8); exec_table.add_column("PPID", style="blue", width=8); exec_table.add_column("Comm", style="cyan", width=16); exec_table.add_column("Filename", style="magenta")
             for event in result.exec_events[-MAX_EBPF_EVENTS_TO_SHOW:]:
-                ts = datetime.datetime.fromtimestamp(
-                    event.timestamp_ns / 1e9, tz=datetime.timezone.utc
-                )
+                # --- BUG FIX START ---
+                # Calculate wall clock time by adding monotonic time to boot time.
+                event_time_unix = boot_time_unix + (event.timestamp_ns / 1e9)
+                ts = datetime.datetime.fromtimestamp(event_time_unix, tz=datetime.timezone.utc)
+                # --- BUG FIX END ---
                 ts_str = ts.isoformat(timespec="milliseconds")
-                exec_table.add_row(
-                    ts_str, str(event.pid), str(event.ppid), event.comm, event.filename
-                )
+                exec_table.add_row(ts_str, str(event.pid), str(event.ppid), event.comm, event.filename)
             output_elements.append(exec_table)
 
         if result.exit_events:
-            exit_table = Table(
-                title=f"Recent Process Exits (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})",
-                show_header=True,
-                header_style="bold blue",
-                expand=True,
-            )
-            exit_table.add_column("Timestamp", style="dim", width=26)
-            exit_table.add_column("PID", style="green", width=8)
-            exit_table.add_column("PPID", style="blue", width=8)
-            exit_table.add_column("Comm", style="cyan", width=16)
-            exit_table.add_column("Exit Code", style="yellow", width=10)
+            exit_table = Table(title=f"Recent Process Exits (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})", show_header=True, header_style="bold blue", expand=True)
+            exit_table.add_column("Timestamp", style="dim", width=26); exit_table.add_column("PID", style="green", width=8); exit_table.add_column("PPID", style="blue", width=8); exit_table.add_column("Comm", style="cyan", width=16); exit_table.add_column("Exit Code", style="yellow", width=10)
             for event in result.exit_events[-MAX_EBPF_EVENTS_TO_SHOW:]:
-                ts = datetime.datetime.fromtimestamp(
-                    event.timestamp_ns / 1e9, tz=datetime.timezone.utc
-                )
+                # --- BUG FIX START ---
+                event_time_unix = boot_time_unix + (event.timestamp_ns / 1e9)
+                ts = datetime.datetime.fromtimestamp(event_time_unix, tz=datetime.timezone.utc)
+                # --- BUG FIX END ---
                 ts_str = ts.isoformat(timespec="milliseconds")
                 exit_code_str = str(event.exit_code)
-                if event.exit_code != 0:
-                    exit_code_str = f"[bold red]{exit_code_str}[/bold red]"
-                exit_table.add_row(
-                    ts_str, str(event.pid), str(event.ppid), event.comm, exit_code_str
-                )
+                if event.exit_code != 0: exit_code_str = f"[bold red]{exit_code_str}[/bold red]"
+                exit_table.add_row(ts_str, str(event.pid), str(event.ppid), event.comm, exit_code_str)
             output_elements.append(exit_table)
 
-    # Filter out any potential empty strings or None values before rendering
     valid_elements = [elem for elem in output_elements if elem]
-
     if valid_elements:
-        # Use Group for correct rendering within Panel
-        final_panel = Panel(
-            Group(*valid_elements), title=title, border_style=border_style, expand=False
-        )
-        console.print(final_panel)
-    elif not result.error:
-        # This case is now unlikely but safe to keep.
-        # It handles if the summary text was the only thing, which is now inside the panel.
-        log.debug("format_ebpf_report: No valid elements to render in panel.")
-
+        console.print(Panel(Group(*valid_elements), title=title, border_style=border_style, expand=False))
 
 # --- Full Report Formatting ---
 def format_rich_report(report: Optional[SystemReport], console: Console) -> None:

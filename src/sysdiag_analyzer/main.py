@@ -469,17 +469,17 @@ def run(
             effective_model_name = llm_model or llm_config_section.get("model")
             if not HAS_LLM_ENGINE:
                 CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM analysis requested, but LLM dependencies are not installed.")
-                CONSOLE_ERR.print("Install with: [cyan]pip install sysdiag-analyzer[llm][/cyan]")
+                CONSOLE_ERR.print("Install with: [cyan]pip install sysdiag-analyzer\\[llm][/cyan]")
                 raise typer.Exit(code=1)
             if not provider_name:
-                CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM analysis requested, but 'provider' is not specified in the \[llm] section of the configuration file.")
+                CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM analysis requested, but 'provider' is not specified in the \\[llm] section of the configuration file.")
                 raise typer.Exit(code=1)
             if not effective_model_name:
-                CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM analysis requested, but 'model' is not specified in the \[llm] section of the configuration file and not provided via --llm-model.")
+                CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM analysis requested, but 'model' is not specified in the \\[llm] section of the configuration file and not provided via --llm-model.")
                 raise typer.Exit(code=1)
             if provider_name == "ollama" and not HAS_LLM_OLLAMA:
                 CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM provider 'ollama' configured, but the 'ollama' library is not installed.")
-                CONSOLE_ERR.print("Install with: [cyan]pip install sysdiag-analyzer[llm][/cyan]")
+                CONSOLE_ERR.print("Install with: [cyan]pip install sysdiag-analyzer\\[llm][/cyan]")
                 raise typer.Exit(code=1)
             effective_llm_config = llm_config_section.copy()
             effective_llm_config["model"] = effective_model_name
