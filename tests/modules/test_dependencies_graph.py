@@ -2,9 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import pytest
-import collections
-import re # Import re
-from unittest.mock import patch, MagicMock, call, ANY
+from unittest.mock import patch, MagicMock
 
 # Conditional import for networkx
 try:

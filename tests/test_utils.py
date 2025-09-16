@@ -3,10 +3,8 @@
 
 import pytest
 import json
-import datetime
-import os
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 # Module to test
 from sysdiag_analyzer import utils

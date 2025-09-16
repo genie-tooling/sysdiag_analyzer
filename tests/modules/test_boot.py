@@ -1,8 +1,7 @@
 import datetime
 import pytest
-import re
 from typing import List, Optional
-from unittest.mock import patch, MagicMock, call # Import mock utilities
+from unittest.mock import patch, MagicMock # Import mock utilities
 
 # Module to test
 from sysdiag_analyzer.modules import boot

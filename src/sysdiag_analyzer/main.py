@@ -2,14 +2,13 @@
 
 import logging
 import os
-import sys
+import time
 import platform
 import datetime
 import json
 import gzip
-import pathlib
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple # Added Tuple
+from typing import Optional, List, Dict, Any
 
 import typer
 from rich.console import Console
@@ -17,9 +16,12 @@ from rich.logging import RichHandler
 from rich.panel import Panel # Import Panel for config show
 from rich.syntax import Syntax # Import Syntax for config show
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 
 # --- Local Imports ---
+
+from . import features
+
 from .datatypes import (
     SystemReport,
     BootAnalysisResult,
@@ -30,8 +32,7 @@ from .datatypes import (
     FullDependencyAnalysisResult,
     MLAnalysisResult,
     LLMAnalysisResult,
-    EBPFAnalysisResult, # Added Phase 10
-    AnomalyInfo,
+    EBPFAnalysisResult,
     BootTimes,
     UnitHealthInfo # Added UnitHealthInfo
 )
@@ -69,7 +70,18 @@ except ImportError:
     HAS_LLM_ENGINE = False
     HAS_LLM_OLLAMA = False
 
-# Import eBPF Monitor (Phase 10)
+from .output import (
+    format_rich_report,
+    format_json_report,
+    format_boot_report,
+    format_health_report,
+    format_resource_report,
+    format_log_report
+)
+from .utils import get_boot_id
+from .config import load_config, DEFAULT_CONFIG # Import config loading
+
+# Import eBPF Monitor
 HAS_BCC = False
 HAS_EBPF_MONITOR = False
 try:
@@ -83,24 +95,6 @@ except ImportError as e:
     ebpf_monitor = None # type: ignore
     HAS_EBPF_MONITOR = False
     HAS_BCC = False
-
-
-from .output import (
-    format_rich_report,
-    format_json_report,
-    format_boot_report,
-    format_health_report,
-    format_resource_report,
-    format_log_report,
-    format_dependency_report,
-    format_full_dependency_report,
-    format_ml_report,
-    format_llm_report,
-    format_ebpf_report # Added Phase 10
-)
-from .utils import run_subprocess, get_boot_id
-from .features import extract_features_from_report # Used by ML/LLM
-from .config import load_config, DEFAULT_CONFIG # Import config loading
 
 # --- Basic Configuration ---
 LOG_LEVEL = logging.INFO
@@ -197,68 +191,15 @@ def _apply_retention(history_dir: Path, max_files: int):
     except Exception as e:
         log.error(f"Error applying retention policy in {history_dir}: {e}", exc_info=True)
 
-
-# --- Core Analysis Function ---
-def run_full_analysis(
-    history_dir: Path,
-    model_dir: Path,
-    all_units: List[UnitHealthInfo], # Added parameter
-    dbus_manager: Optional[Any],    # Added parameter
-    since: Optional[str] = None,
-    enable_ebpf: bool = False,
-    analyze_full_graph: bool = False,
-    analyze_ml: bool = False,
-    analyze_llm: bool = False,
-    llm_config: Optional[Dict[str, Any]] = None,
+def _run_core_analyses(
+    report: SystemReport,
+    all_units: List[UnitHealthInfo],
+    dbus_manager: Optional[Any],
+    analyze_full_graph: bool,
 ) -> SystemReport:
-    """Gathers all analysis data."""
-    log.info("Starting full system analysis (inside run_full_analysis)...")
-    # Check privileges again inside analysis for completeness, but primary check is in run()
-    is_root = check_privileges(required_for="eBPF tracing, cgroup access, DBus, journal")
+    """Runs the synchronous analysis modules."""
+    # This function now contains the logic that used to be directly in run_full_analysis
 
-    current_boot_id = get_boot_id()
-    report = SystemReport(
-        hostname=platform.node(),
-        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        boot_id=current_boot_id
-    )
-
-    # --- DBus manager and unit list are now passed in ---
-    if not all_units:
-        log.warning("run_full_analysis received empty unit list. Analysis will be limited.")
-        # Add an error? Or just proceed? Let's proceed but results will be empty.
-        report.errors.append("Analysis performed with empty unit list.")
-
-    # --- eBPF Setup (if enabled) ---
-    ebpf_collector = None
-    if enable_ebpf:
-        if not is_root:
-            log.error("eBPF analysis requested, but not running as root. Skipping eBPF.")
-            report.errors.append("eBPF analysis skipped: Root privileges required.")
-            report.ebpf_analysis = EBPFAnalysisResult(error="Root privileges required.")
-        elif not HAS_EBPF_MONITOR or not ebpf_monitor:
-            log.error("eBPF analysis requested, but eBPF module failed to load.")
-            report.errors.append("eBPF analysis skipped: Module load failed.")
-            report.ebpf_analysis = EBPFAnalysisResult(error="eBPF module load failed.")
-        elif not HAS_BCC:
-            log.error("eBPF analysis requested, but 'bcc' library is not installed.")
-            report.errors.append("eBPF analysis skipped: 'bcc' library missing (install sysdiag-analyzer[ebpf]).")
-            report.ebpf_analysis = EBPFAnalysisResult(error="'bcc' library not installed.")
-        else:
-            try:
-                log.info("Initializing eBPF monitoring...")
-                ebpf_collector = ebpf_monitor.EBPFCollector()
-                ebpf_collector.start()
-                log.info("eBPF monitoring started.")
-            except Exception as e:
-                log.exception("Failed to initialize or start eBPF monitoring.")
-                report.errors.append(f"eBPF initialization failed: {e}")
-                report.ebpf_analysis = EBPFAnalysisResult(error=f"Initialization failed: {e}")
-                ebpf_collector = None # Ensure collector is None if start failed
-    else:
-        log.info("Skipping eBPF analysis (flag not set).")
-
-    # --- Run Core Analyses Sequentially ---
     # Boot analysis
     try:
         report.boot_analysis = analyze_boot_logic()
@@ -271,13 +212,9 @@ def run_full_analysis(
             report.boot_analysis.times = BootTimes()
         report.boot_analysis.times.error = report.boot_analysis.times.error or f"Failed to get result: {e}"
 
-    # Health analysis - Pass the fetched list
+    # Health analysis
     try:
-        # Use the passed-in units list and manager
-        report.health_analysis = analyze_health_logic(
-            units=all_units,
-            dbus_manager=dbus_manager
-        )
+        report.health_analysis = analyze_health_logic(units=all_units, dbus_manager=dbus_manager)
     except Exception as e:
         log.exception("Error during health analysis.")
         report.errors.append(f"Health analysis failed: {e}")
@@ -286,13 +223,9 @@ def run_full_analysis(
         else:
             report.health_analysis.analysis_error = report.health_analysis.analysis_error or f"Failed to get result: {e}"
 
-    # Resource analysis - Pass the fetched list
+    # Resource analysis
     try:
-        # Use the passed-in units list and manager
-        report.resource_analysis = analyze_resources_logic(
-            units=all_units,
-            dbus_manager=dbus_manager
-        )
+        report.resource_analysis = analyze_resources_logic(units=all_units, dbus_manager=dbus_manager)
     except Exception as e:
         log.exception("Error during resource analysis.")
         report.errors.append(f"Resource analysis failed: {e}")
@@ -303,15 +236,10 @@ def run_full_analysis(
 
     # Dependency analysis (Failed Units)
     try:
-        # Use the detailed failed units list directly from health analysis result
         failed_units_to_analyze = report.health_analysis.failed_units if report.health_analysis else []
         if failed_units_to_analyze:
             log.info(f"Running dependency analysis for {len(failed_units_to_analyze)} failed units...")
-            # Use the passed-in manager
-            report.dependency_analysis = analyze_dependencies_logic(
-                failed_units=failed_units_to_analyze,
-                dbus_manager=dbus_manager
-            )
+            report.dependency_analysis = analyze_dependencies_logic(failed_units=failed_units_to_analyze, dbus_manager=dbus_manager)
         else:
             log.info("Skipping dependency analysis: No failed units identified.")
             report.dependency_analysis = DependencyAnalysisResult()
@@ -351,120 +279,178 @@ def run_full_analysis(
         else:
             report.log_analysis.analysis_error = report.log_analysis.analysis_error or f"Failed to get result: {e}"
 
-    # eBPF Teardown & Data Collection
+    return report
+
+# --- Core Analysis Function ---
+def run_full_analysis(
+    history_dir: Path,
+    model_dir: Path,
+    all_units: List[UnitHealthInfo],
+    dbus_manager: Optional[Any],
+    since: Optional[str] = None,
+    enable_ebpf: bool = False,
+    analyze_full_graph: bool = False,
+    analyze_ml: bool = False,
+    analyze_llm: bool = False,
+    llm_config: Optional[Dict[str, Any]] = None,
+) -> SystemReport:
+    """Gathers all analysis data, handling eBPF concurrently."""
+    log.info("Starting full system analysis...")
+    is_root = check_privileges(required_for="eBPF tracing, cgroup access, DBus, journal")
+
+    current_boot_id = get_boot_id()
+    report = SystemReport(
+        hostname=platform.node(),
+        timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        boot_id=current_boot_id
+    )
+
+    if not all_units:
+        log.warning("run_full_analysis received empty unit list. Analysis will be limited.")
+        report.errors.append("Analysis performed with empty unit list.")
+
+    ebpf_collector = None
+    # --- eBPF Setup and Concurrent Execution ---
+    if enable_ebpf:
+        if not is_root or not HAS_EBPF_MONITOR or not HAS_BCC or not ebpf_monitor:
+            # Handle prerequisites checks and report errors
+            error_msg = ""
+            if not is_root:
+                error_msg = "Root privileges required."
+            elif not HAS_EBPF_MONITOR:
+                error_msg = "eBPF module load failed."
+            elif not HAS_BCC:
+                error_msg = "'bcc' library missing (install sysdiag-analyzer[ebpf])."
+            
+            log.error(f"eBPF analysis requested, but prerequisites not met: {error_msg}")
+            report.errors.append(f"eBPF analysis skipped: {error_msg}")
+            report.ebpf_analysis = EBPFAnalysisResult(error=error_msg)
+        else:
+            try:
+                # Start the collector
+                log.info("Initializing eBPF monitoring...")
+                ebpf_collector = ebpf_monitor.EBPFCollector()
+                ebpf_collector.start()
+                log.info("eBPF monitoring started. Running core analysis in background...")
+
+                # Run core analyses in a background thread
+                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="CoreAnalysis") as executor:
+                    analysis_future = executor.submit(
+                        _run_core_analyses,
+                        report,
+                        all_units,
+                        dbus_manager,
+                        analyze_full_graph,
+                    )
+
+                    # Poll for eBPF events while core analysis is running
+                    while not analysis_future.done():
+                        ebpf_collector.poll_events(timeout_ms=100)
+                        time.sleep(0.1) # Prevent a tight loop
+
+                    # Get the result from the background thread
+                    report = analysis_future.result()
+                    log.info("Core analysis finished.")
+
+            except Exception as e:
+                log.exception("Failed to initialize or run eBPF monitoring concurrently.")
+                report.errors.append(f"eBPF initialization/run failed: {e}")
+                report.ebpf_analysis = EBPFAnalysisResult(error=f"Initialization failed: {e}")
+                if ebpf_collector and ebpf_collector._running:
+                    ebpf_collector.stop() # Attempt to clean up
+                ebpf_collector = None
+    else:
+        # --- Synchronous Path (eBPF Disabled) ---
+        log.info("Skipping eBPF analysis (flag not set). Running core analysis synchronously.")
+        report = _run_core_analyses(report, all_units, dbus_manager, analyze_full_graph)
+
+    # --- eBPF Teardown (if it was started) ---
     if ebpf_collector:
         log.info("Stopping eBPF monitoring and collecting events...")
         try:
             report.ebpf_analysis = ebpf_collector.stop()
             log.info(f"Collected {len(report.ebpf_analysis.exec_events)} exec events and {len(report.ebpf_analysis.exit_events)} exit events.")
-            # TODO: Add correlation logic here to map cgroup IDs to unit names
         except Exception as e:
-            log.exception("Error stopping eBPF monitoring or collecting data.")
+            log.exception("Error stopping eBPF monitoring.")
             err_msg = f"eBPF data collection failed: {e}"
             report.errors.append(err_msg)
             if report.ebpf_analysis is None:
                 report.ebpf_analysis = EBPFAnalysisResult()
             report.ebpf_analysis.error = err_msg
 
-    # ML Analysis (Optional)
+    # --- ML and LLM Analysis (run after core analysis is complete) ---
     if analyze_ml:
         log.info("ML analysis requested.")
         ml_result = MLAnalysisResult()
         report.ml_analysis = ml_result
-
         if not HAS_ML_ENGINE or not ml_engine:
-            ml_result.error = "ML dependencies (pandas, scikit-learn, joblib) not installed. Skipping ML analysis."
+            ml_result.error = "ML dependencies not installed. Skipping ML analysis."
             log.error(ml_result.error)
         else:
             try:
-                current_report_dict = asdict(report)
-                current_features_list = extract_features_from_report(current_report_dict)
+                # 1. Load the pre-trained models and scalers
+                log.info(f"Loading ML models and scalers from {model_dir}...")
+                anomaly_models = ml_engine.load_models(ml_engine.ANOMALY_MODEL_TYPE, model_dir)
+                scalers = ml_engine.load_models(ml_engine.SCALER_MODEL_TYPE, model_dir)
+                ml_result.models_loaded_count = len(anomaly_models)
 
-                if not current_features_list:
-                    ml_result.error = "No features could be extracted from the current report for ML analysis."
+                if not anomaly_models or not scalers:
+                    ml_result.error = "No pre-trained models or scalers found. Run 'retrain-ml' first."
                     log.warning(ml_result.error)
                 else:
-                    current_features_df = ml_engine.pd.DataFrame(current_features_list)
-                    current_features_engineered_df = ml_engine.engineer_features(current_features_df)
+                    # 2. Extract features from the CURRENT report for anomaly detection
+                    log.info("Extracting features from current report for ML analysis...")
+                    current_report_dict = asdict(report)
+                    current_features_list = features.extract_features_from_report(current_report_dict)
 
-                    if current_features_engineered_df is None or current_features_engineered_df.empty:
-                         ml_result.error = "Feature engineering failed or resulted in empty data for current report."
-                         log.warning(ml_result.error)
+                    if not current_features_list:
+                        log.warning("No features extracted from the current report for ML analysis.")
+                        ml_result.error = "No features to analyze in the current report."
                     else:
-                        log.info("Loading pre-trained ML models...")
-                        anomaly_models = ml_engine.load_models(ml_engine.ANOMALY_MODEL_TYPE, model_dir)
-                        scalers = ml_engine.load_models(ml_engine.SCALER_MODEL_TYPE, model_dir)
-                        ml_result.models_loaded_count = len(anomaly_models)
+                        # 3. Convert the current features list into a DataFrame
+                        log.debug(f"Converting {len(current_features_list)} feature sets from current report into a DataFrame.")
+                        current_features_df = ml_engine.pd.DataFrame(current_features_list)
+                        
+                        # Perform minimal preparation similar to load_and_prepare_data
+                        current_features_df['report_timestamp'] = ml_engine.pd.to_datetime(current_features_df['report_timestamp'])
 
-                        if not anomaly_models or not scalers:
-                            ml_result.error = f"No pre-trained anomaly models or scalers found in {model_dir}. Run 'retrain-ml' first."
-                            log.warning(ml_result.error)
+                        # 4. Engineer the current features
+                        engineered_df = ml_engine.engineer_features(current_features_df)
+                        ml_result.units_analyzed_count = engineered_df['unit_name'].nunique() if not engineered_df.empty else 0
+
+                        # 5. Detect anomalies
+                        if not engineered_df.empty:
+                            log.info(f"Running anomaly detection for {ml_result.units_analyzed_count} units...")
+                            anomalies = ml_engine.detect_anomalies(engineered_df, anomaly_models, scalers)
+                            ml_result.anomalies_detected = anomalies
                         else:
-                            log.info("Detecting anomalies using loaded models...")
-                            if 'report_timestamp' in current_features_engineered_df.columns:
-                                if 'unit_name' in current_features_engineered_df.columns:
-                                    latest_features_df = current_features_engineered_df.loc[
-                                        current_features_engineered_df.groupby('unit_name')['report_timestamp'].idxmax()
-                                    ]
-                                    ml_result.anomalies_detected = ml_engine.detect_anomalies(latest_features_df, anomaly_models, scalers)
-                                    ml_result.units_analyzed_count = len(latest_features_df)
-                                    log.info(f"ML analysis complete. Detected {len(ml_result.anomalies_detected)} anomalies in {ml_result.units_analyzed_count} units.")
-                                else:
-                                    ml_result.error = "Engineered features DataFrame missing 'unit_name' column."
-                                    log.error(ml_result.error)
-                            else:
-                                ml_result.error = "Engineered features DataFrame missing 'report_timestamp' column."
-                                log.error(ml_result.error)
+                            log.warning("Feature engineering resulted in an empty DataFrame; skipping anomaly detection.")
 
-            except ImportError as imp_err:
-                 ml_result.error = f"ML analysis failed due to missing dependency: {imp_err}"
-                 log.error(ml_result.error)
             except Exception as e:
-                log.exception("Error during ML analysis.")
+                log.exception("An unexpected error occurred during ML analysis.")
                 ml_result.error = f"ML analysis failed: {e}"
-                report.errors.append(ml_result.error)
-    else:
-        log.info("Skipping ML analysis (flag not set).")
-
-    # LLM Synthesis (Optional)
+    
     if analyze_llm:
         log.info("LLM synthesis requested.")
-        llm_result = LLMAnalysisResult()
-        report.llm_analysis = llm_result
-
         if not llm_config:
-             llm_result.error = "LLM analysis requested, but LLM configuration was not provided."
-             log.error(llm_result.error)
+            report.llm_analysis = LLMAnalysisResult(error="LLM config not provided.")
         elif not HAS_LLM_ENGINE or not llm_analyzer:
-             llm_result.error = "LLM analysis module failed to load internally."
-             log.error(llm_result.error)
+            report.llm_analysis = LLMAnalysisResult(error="LLM module failed to load or dependencies are missing.")
         else:
             try:
-                provider_name = llm_config.get("provider")
-                model_name = llm_config.get("model")
-                log.info(f"Running LLM synthesis using provider '{provider_name}' and model '{model_name}'...")
+                log.info(f"Invoking LLM analysis with model '{llm_config.get('model')}'...")
+                # Call the main LLM analysis function and assign its result to the report
                 report.llm_analysis = llm_analyzer.analyze_with_llm(
                     report=report,
                     llm_config=llm_config,
-                    history_dir=history_dir
+                    history_dir=history_dir  # Pass the history_dir Path object
                 )
-                log.info("LLM synthesis finished.")
-                if report.llm_analysis and report.llm_analysis.error:
-                     log.error(f"LLM Analysis Error: {report.llm_analysis.error}")
-
             except Exception as e:
-                log.exception("Error during LLM analysis orchestration.")
-                err_msg = f"LLM synthesis failed: {e}"
-                if report.llm_analysis is None:
-                    report.llm_analysis = LLMAnalysisResult()
-                report.llm_analysis.error = err_msg
-                report.errors.append(err_msg)
-    else:
-        log.info("Skipping LLM synthesis (flag not set).")
+                log.exception("An unexpected error occurred during LLM analysis.")
+                report.llm_analysis = LLMAnalysisResult(error=f"LLM analysis failed: {e}")
 
-    log.info("Full system analysis finished (within run_full_analysis).")
+    log.info("Full system analysis finished.")
     return report
-
 
 # --- Typer Commands ---
 config_app = typer.Typer(help="Manage sysdiag-analyzer configuration.")
@@ -523,12 +509,10 @@ def run(
                 CONSOLE.print("Install with: [cyan]pip install sysdiag-analyzer[llm][/cyan]")
                 raise typer.Exit(code=1)
             if not provider_name:
-                # FIX: Use string concatenation/formatting
-                CONSOLE.print("[bold red]Error:[/bold red] LLM analysis requested, but 'provider' is not specified in the [llm] section of the configuration file.")
+                CONSOLE.print("[bold red]Error:[/bold red] LLM analysis requested, but 'provider' is not specified in the \[llm] section of the configuration file.")
                 raise typer.Exit(code=1)
             if not effective_model_name:
-                # FIX: Use string concatenation/formatting
-                CONSOLE.print("[bold red]Error:[/bold red] LLM analysis requested, but 'model' is not specified in the [llm] section of the configuration file and not provided via --llm-model.")
+                CONSOLE.print("[bold red]Error:[/bold red] LLM analysis requested, but 'model' is not specified in the \[llm] section of the configuration file and not provided via --llm-model.")
                 raise typer.Exit(code=1)
             if provider_name == "ollama" and not HAS_LLM_OLLAMA:
                 CONSOLE.print("[bold red]Error:[/bold red] LLM provider 'ollama' configured, but the 'ollama' library is not installed.")
@@ -602,17 +586,17 @@ def run(
         # --- Exit Code ---
         exit_code = 0
         if report:
+            # A non-zero exit code should be triggered by definite failures or tool errors.
             if report.health_analysis and report.health_analysis.failed_units:
-                exit_code = 1
-            elif report.ml_analysis and report.ml_analysis.anomalies_detected:
                 exit_code = 1
             elif report.llm_analysis and report.llm_analysis.error:
                 exit_code = 1
             elif report.ebpf_analysis and report.ebpf_analysis.error:
                 exit_code = 1
-            elif report.errors:
+            elif report.errors: # Check the report's top-level error list
                 exit_code = 1
         else:
+             # If no report was generated at all, that's an error.
              exit_code = 1
 
         if exit_code != 0:
@@ -706,7 +690,6 @@ def show_history(
     config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to a custom TOML configuration file.", exists=False, file_okay=True, dir_okay=False, readable=True),
 ):
     """List metadata about recent analysis reports stored in the history."""
-    # (Logic remains the same)
     app_config = load_config(config_path_override=config_file)
     current_history_dir = Path(app_config.get("history", {}).get("directory", DEFAULT_CONFIG["history"]["directory"]))
 
@@ -749,7 +732,8 @@ def show_history(
              from rich.table import Table
              table = Table(title=f"Recent Analysis Reports (Last {len(reports_meta)})", show_header=True, header_style="bold magenta")
              table.add_column("#", style="dim", width=3)
-             table.add_column("Filename", style="cyan")
+             # FIX: Added no_wrap=True to prevent the filename from being truncated
+             table.add_column("Filename", style="cyan", no_wrap=True)
              table.add_column("Size (KiB)", style="green", justify="right")
              table.add_column("Saved Timestamp (UTC)", style="yellow")
              for meta in reports_meta:
@@ -764,7 +748,6 @@ def show_history(
     except Exception as e:
         log.exception(f"Error accessing or listing history directory {current_history_dir}: {e}")
         raise typer.Exit(code=1)
-
 
 # --- analyze_unit Command (Still stubbed) ---
 @app.command()

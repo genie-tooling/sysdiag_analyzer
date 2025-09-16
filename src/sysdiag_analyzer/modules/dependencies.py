@@ -38,16 +38,15 @@ from ..datatypes import (
     FailedUnitDependencyInfo,
     DependencyInfo,
     UnitHealthInfo, # Input type
-    FullDependencyAnalysisResult # Added Phase 6 result type
+    FullDependencyAnalysisResult
 )
 from ..utils import run_subprocess
 
 log = logging.getLogger(__name__)
-log_dep = logging.getLogger(__name__ + ".detail") # Specific logger for Phase 5 details
-log_graph = logging.getLogger(__name__ + ".graph") # Logger for graph operations (Phase 6)
+log_dep = logging.getLogger(__name__ + ".detail")
+log_graph = logging.getLogger(__name__ + ".graph")
 
-
-# --- Helper Functions (Phase 5) ---
+# --- Helper Functions ---
 
 def _get_dependency_state(
     dep_name: str,
@@ -113,8 +112,6 @@ def _is_dependency_problematic(dep_info: DependencyInfo) -> bool:
     # Before/After dependencies primarily affect ordering, less likely to be the *cause* of failure state itself.
     # Could add checks here if needed (e.g., if an 'After' unit is running but the main unit failed).
     return False
-
-# --- Main Analysis Function (Phase 5) ---
 
 def analyze_dependencies(
     failed_units: List[UnitHealthInfo],
@@ -206,8 +203,6 @@ def analyze_dependencies(
 
     log.info(f"Dependency analysis finished for {len(failed_units)} failed units.")
     return result
-
-# --- Phase 6: Full Dependency Graph Analysis ---
 
 # Define TREE_CHARS at module level for use in parsing
 TREE_CHARS = "●○├└│─" # Characters used for tree drawing

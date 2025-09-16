@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 
 import pytest
-import psutil
 from pathlib import Path
-from typing import Optional, List, Dict, Any # Added List, Dict, Any
-from unittest.mock import patch, MagicMock, mock_open, call, ANY
+from typing import Optional # Added List, Dict, Any
+from unittest.mock import patch, MagicMock
 
 # Conditional import for dbus
 try:
@@ -28,7 +27,7 @@ if HAS_DBUS_FOR_TESTS:
 
 # Modules and datatypes to test
 from sysdiag_analyzer.modules import resources
-from sysdiag_analyzer.datatypes import (SystemResourceUsage, UnitResourceUsage, UnitHealthInfo, ResourceAnalysisResult, ChildProcessGroupUsage)
+from sysdiag_analyzer.datatypes import (SystemResourceUsage, UnitResourceUsage, UnitHealthInfo, ResourceAnalysisResult)
 
 # --- Mock Data ---
 MOCK_CPU_PERCENT = 15.5
@@ -100,93 +99,62 @@ def mock_psutil():
 @pytest.fixture
 def mock_dbus_for_cgroup():
     """
-    Mocks DBus interactions needed for _get_unit_cgroup_path.
-    Yields the mocked manager *interface* object and properties interface mock.
+    Mocks DBus interactions for _get_unit_cgroup_path using INTROSPECTION.
+    Yields the mocked manager interface and properties interface objects.
     """
     if not HAS_DBUS_FOR_TESTS:
-        yield None, None # Yield Nones if dbus not installed
+        yield None, None
         return
 
     mock_bus = MagicMock(spec=dbus.SystemBus if HAS_DBUS_FOR_TESTS else object)
     mock_manager_obj = MagicMock(name="ManagerObjectMock")
     mock_manager_iface = MagicMock(name="ManagerInterfaceMock")
     mock_unit_obj = MagicMock(name="UnitObjectMock")
-    mock_props_iface = MagicMock(spec=['Get'], name="PropertiesInterfaceMock")
+    # *** CREATE THE MOCK HERE ***
+    mock_props_iface = MagicMock(name="PropertiesInterfaceMock")
     mock_manager_iface.bus = mock_bus
 
-    # Mock get_object to return manager or unit object
+    INTROSPECT_XML_SERVICE = """
+    <node>
+      <interface name="org.freedesktop.systemd1.Service"></interface>
+      <interface name="org.freedesktop.DBus.Introspectable"></interface>
+    </node>
+    """
+
     def get_object_side_effect(bus_name, object_path):
         if object_path == '/org/freedesktop/systemd1':
             return mock_manager_obj
-        elif object_path in [
-            '/org/freedesktop/systemd1/unit/unitA_2eservice',
-            '/org/freedesktop/systemd1/unit/unitB_2eservice',
-            '/org/freedesktop/systemd1/unit/partial_5ffiles_2eservice',
-            '/org/freedesktop/systemd1/unit/no_pid_service' # Added no_pid
-        ]:
-            mock_unit_obj.object_path = object_path
-            return mock_unit_obj
-        elif object_path == '/org/freedesktop/systemd1/unit/no_5fcgroup_2eservice':
-            raise MockDBusExceptionForTest(f"Mock object not found (simulating GetUnit failure for {object_path})")
-        else:
-            raise MockDBusExceptionForTest(f"Mock object not found for {object_path}")
+        mock_unit_obj.object_path = object_path
+        return mock_unit_obj
     mock_bus.get_object.side_effect = get_object_side_effect
 
-    # Mock Interface calls
     def interface_side_effect(dbus_object, interface_name):
         if dbus_object == mock_manager_obj and interface_name == 'org.freedesktop.systemd1.Manager':
             return mock_manager_iface
-        elif dbus_object == mock_unit_obj and interface_name == 'org.freedesktop.DBus.Properties':
+        if interface_name == 'org.freedesktop.DBus.Introspectable':
+            introspect_iface = MagicMock()
+            introspect_iface.Introspect.return_value = INTROSPECT_XML_SERVICE
+            return introspect_iface
+        if interface_name == 'org.freedesktop.DBus.Properties':
+            # *** CONFIGURE AND RETURN THE CREATED MOCK ***
+            def props_get_side_effect(iface, prop):
+                if iface == 'org.freedesktop.systemd1.Service' and prop == 'ControlGroup':
+                    return "/system.slice/unitA.service"
+                raise MockDBusExceptionForTest("Mock property not found")
+            mock_props_iface.Get.side_effect = props_get_side_effect
             return mock_props_iface
-        else:
-            return MagicMock(name=f"GenericMock_{interface_name.split('.')[-1]}")
+        return MagicMock()
+    
     mock_interface_class = MagicMock(side_effect=interface_side_effect)
 
-    # Configure specific method mocks
     def get_unit_side_effect(unit_name):
-        escaped_name = unit_name.replace('.', '_2e').replace('-', '_2d')
-        path = f'/org/freedesktop/systemd1/unit/{escaped_name}'
-        if unit_name == "no_cgroup.service":
-             raise MockDBusExceptionForTest("Mock: Unit not found", error_name="org.freedesktop.systemd1.NoSuchUnit")
-        return path
+        return f"/org/freedesktop/systemd1/unit/{unit_name.replace('.', '_2e')}"
     mock_manager_iface.GetUnit.side_effect = get_unit_side_effect
 
-    mock_props_iface.reset_mock()
-    def props_get_side_effect(iface_name, prop_name):
-        if prop_name == 'ControlGroup':
-            current_unit_path = getattr(mock_unit_obj, 'object_path', None)
-            if current_unit_path == '/org/freedesktop/systemd1/unit/unitA_2eservice':
-                 if iface_name == 'org.freedesktop.systemd1.Service':
-                     return "/system.slice/unitA.service"
-                 else:
-                     raise MockDBusExceptionForTest("Property 'ControlGroup' not found on this interface", error_name="org.freedesktop.DBus.Error.UnknownProperty")
-            elif current_unit_path == '/org/freedesktop/systemd1/unit/unitB_2eservice':
-                 if iface_name == 'org.freedesktop.systemd1.Service':
-                     return "/user.slice/unitB.service"
-                 else:
-                     raise MockDBusExceptionForTest("Property 'ControlGroup' not found on this interface", error_name="org.freedesktop.DBus.Error.UnknownProperty")
-            elif current_unit_path == '/org/freedesktop/systemd1/unit/partial_5ffiles_2eservice':
-                 if iface_name == 'org.freedesktop.systemd1.Service':
-                     return "/system.slice/partial_files.service"
-                 else:
-                     raise MockDBusExceptionForTest("Property 'ControlGroup' not found on this interface", error_name="org.freedesktop.DBus.Error.UnknownProperty")
-            elif current_unit_path == '/org/freedesktop/systemd1/unit/no_pid_service': # Added no_pid path
-                 if iface_name == 'org.freedesktop.systemd1.Service':
-                     return "/system.slice/no_pid.service"
-                 else:
-                     raise MockDBusExceptionForTest("Property 'ControlGroup' not found on this interface", error_name="org.freedesktop.DBus.Error.UnknownProperty")
-            else:
-                 raise MockDBusExceptionForTest("Property 'ControlGroup' not found on this path", error_name="org.freedesktop.DBus.Error.UnknownProperty")
-        else:
-            raise MockDBusExceptionForTest(f"Mock property {prop_name} not found", error_name="org.freedesktop.DBus.Error.UnknownProperty")
-    mock_props_iface.Get.side_effect = props_get_side_effect
-
-    # Patch dbus module attributes
     with patch('sysdiag_analyzer.modules.resources.dbus.SystemBus', return_value=mock_bus), \
-         patch('sysdiag_analyzer.modules.resources.dbus.Interface', mock_interface_class), \
-         patch('sysdiag_analyzer.modules.resources.dbus.exceptions.DBusException', MockDBusExceptionForTest):
+         patch('sysdiag_analyzer.modules.resources.dbus.Interface', mock_interface_class):
+        # *** YIELD BOTH MOCKS SO THE TEST CAN USE THEM ***
         yield mock_manager_iface, mock_props_iface
-
 
 # --- Tests for System-Wide Usage ---
 def test_get_system_wide_usage_success(mock_psutil):
@@ -295,26 +263,42 @@ def test_get_unit_resource_usage_success(mock_get_cgroup_path, mock_read_file, m
         filename = path.name
         unit_context = current_unit_for_read
         if unit_context == "unitA.service":
-            if filename == "cpu.stat": return MOCK_CPU_STAT_CONTENT
-            if filename == "memory.current": return MOCK_MEM_CURRENT_CONTENT
-            if filename == "memory.peak": return MOCK_MEM_PEAK_CONTENT
-            if filename == "io.stat": return MOCK_IO_STAT_CONTENT
-            if filename == "cgroup.procs": return MOCK_CGROUP_PROCS_CONTENT
+            if filename == "cpu.stat":
+                return MOCK_CPU_STAT_CONTENT
+            if filename == "memory.current":
+                return MOCK_MEM_CURRENT_CONTENT
+            if filename == "memory.peak":
+                return MOCK_MEM_PEAK_CONTENT
+            if filename == "io.stat":
+                return MOCK_IO_STAT_CONTENT
+            if filename == "cgroup.procs":
+               return MOCK_CGROUP_PROCS_CONTENT
         elif unit_context == "unitB.service":
-            if filename == "cpu.stat": return "usage_usec 987654321"
-            if filename == "memory.current": return "209715200"
-            if filename == "memory.peak": return "209715200"
-            if filename == "io.stat": return "rbytes=10000 wbytes=20000"
-            if filename == "cgroup.procs": return "1111\n2222"
+            if filename == "cpu.stat":
+                return "usage_usec 987654321"
+            if filename == "memory.current":
+               return "209715200"
+            if filename == "memory.peak":
+               return "209715200"
+            if filename == "io.stat":
+                return "rbytes=10000 wbytes=20000"
+            if filename == "cgroup.procs":
+                return "1111\n2222"
         elif unit_context == "partial_files.service":
-            if filename == "cpu.stat": return MOCK_CPU_STAT_CONTENT
-            if filename == "memory.current": return MOCK_MEM_CURRENT_CONTENT
-            if filename == "memory.peak": return MOCK_MEM_PEAK_CONTENT
-            if filename == "io.stat": return None # Simulate read failure for partial
-            if filename == "cgroup.procs": return None # Simulate read failure for partial
+            if filename == "cpu.stat":
+                return MOCK_CPU_STAT_CONTENT
+            if filename == "memory.current":
+                return MOCK_MEM_CURRENT_CONTENT
+            if filename == "memory.peak":
+                return MOCK_MEM_PEAK_CONTENT
+            if filename == "io.stat":
+                return None # Simulate read failure for partial
+            if filename == "cgroup.procs":
+                return None # Simulate read failure for partial
         elif unit_context == "no_pid_service":
-             if filename == "cpu.stat": return "usage_usec 50000000"
-             return None
+            if filename == "cpu.stat":
+               return "usage_usec 50000000"
+            return None
         return None
     mock_read_file.side_effect = read_file_side_effect
 

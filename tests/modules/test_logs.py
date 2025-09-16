@@ -2,12 +2,11 @@ import pytest
 import json
 import datetime
 import re
-from unittest.mock import patch, MagicMock, call, ANY
+from unittest.mock import patch, MagicMock, ANY
 
 # Module to test
 from sysdiag_analyzer.modules import logs
-from sysdiag_analyzer.datatypes import LogAnalysisResult, LogPatternInfo
-from sysdiag_analyzer import utils # To mock run_subprocess
+from sysdiag_analyzer.datatypes import LogPatternInfo
 
 # --- Constants ---
 T_BASE = 1700000000 # Base timestamp in seconds

@@ -1,10 +1,8 @@
 # -*- coding: utf-8 -*-
-# Phase 10: Tests for eBPF Monitor module
 
 import pytest
-import time
 import ctypes as ct # Import ctypes
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 import logging
 
 # Conditional import for BCC

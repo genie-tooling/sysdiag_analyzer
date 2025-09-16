@@ -5,14 +5,12 @@ import pytest
 import os
 import gzip
 import json
-import time
 import datetime
 from pathlib import Path
-from unittest.mock import patch, MagicMock, mock_open, call
+from unittest.mock import patch, mock_open
 
 # Module to test
 from sysdiag_analyzer import features
-from sysdiag_analyzer.datatypes import SystemReport, ResourceAnalysisResult, UnitResourceUsage, HealthAnalysisResult, UnitHealthInfo, BootAnalysisResult, BootBlameItem
 
 # --- Constants ---
 # MOCK_HISTORY_DIR = Path("/fake/history/dir") # No longer global

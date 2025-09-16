@@ -4,7 +4,7 @@ import gzip
 import json
 import logging
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 # Use try-except for datatypes import for potential standalone use/testing
 try:
     from .datatypes import SystemReport

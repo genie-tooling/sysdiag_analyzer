@@ -1,13 +1,12 @@
 import pytest
 import json
 import datetime # Added for log parsing tests
-from unittest.mock import patch, MagicMock, call, ANY
-from typing import List, Optional # Added List, Optional
+from unittest.mock import patch, MagicMock
+from typing import List # Added List, Optional
 
 # Modules to test
 from sysdiag_analyzer.modules import health
-from sysdiag_analyzer.datatypes import HealthAnalysisResult, UnitHealthInfo
-from sysdiag_analyzer import utils # To mock run_subprocess
+from sysdiag_analyzer.datatypes import UnitHealthInfo
 
 # --- Mock Data (remains the same) ---
 class MockDBusException(Exception):

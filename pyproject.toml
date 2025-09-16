@@ -4,8 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sysdiag-analyzer"
-# Version Bump for Phase 10 (eBPF, Child Proc Mon, Refinements)
-version = "0.6.0" # Consider bumping to 0.7.0 or 1.0.0-beta.1 after these changes
+version = "0.8.0"
 authors = [
   { name="Systemd Smartfilter Architect Supreme", email="sysdiag@example.com" }, # Updated Author Info
 ]
@@ -31,6 +30,10 @@ dependencies = [
     # --- Config Parsing ---
     # `tomli` needed for Python < 3.11, `toml` module is built-in >= 3.11
     'tomli>=1.1.0,<3.0.0; python_version < "3.11"',
+    "pandas>=2.0.3",
+    "scikit-learn>=1.3.2",
+    "joblib>=1.4.2",
+    "pygments>=2.19.2",
 ]
 
 [project.scripts]

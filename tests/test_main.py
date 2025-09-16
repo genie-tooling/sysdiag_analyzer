@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import pytest
-import json
 import re # Import re for ANSI stripping
 from unittest.mock import patch, MagicMock, ANY, mock_open
 from typer.testing import CliRunner
@@ -10,17 +9,13 @@ from pathlib import Path # Import Path
 import datetime # Import datetime
 import time # Import time
 import os # Import os
-import gzip # Import gzip
 from dataclasses import asdict # Import asdict
-import stat as stat_module # Import stat module to use S_ISDIR
 
 # Module to test (main application entry point)
 from sysdiag_analyzer.main import app
 from sysdiag_analyzer.datatypes import (
-    SystemReport, FullDependencyAnalysisResult, MLAnalysisResult,
-    LLMAnalysisResult, AnomalyInfo, UnitHealthInfo # Add UnitHealthInfo
+    SystemReport, UnitHealthInfo # Add UnitHealthInfo
 )
-from sysdiag_analyzer.modules.health import _get_all_units_dbus, _get_all_units_json # Import helpers
 
 # Conditional import for ML tests
 try:
@@ -178,9 +173,7 @@ def test_run_llm_fail_fast_no_provider(mock_load_config, mock_run_full, runner, 
 
     assert result.exit_code == 1
     stdout_clean = strip_ansi(result.stdout)
-    assert "'provider' is not specified" in stdout_clean
-    # Check the CORRECTED error message format
-    assert "in the [llm] section" in stdout_clean # This should pass now
+    assert "'provider' is not specified in the [llm]" in stdout_clean # This should pass now
     mock_run_full.assert_not_called()
 
 @patch('sysdiag_analyzer.main.run_full_analysis')
@@ -314,48 +307,50 @@ def test_run_command_integration_no_save(
     mock_save_report.assert_not_called() # Not saved
     mock_apply_retention.assert_not_called() # Retention not applied
 
-# --- Test `show-history` Command (No changes needed) ---
 @pytest.fixture
 def mock_history_dir_show(tmp_path):
-    """Creates mock history directory and files for show-history."""
+    """Creates mock history directory and files with deterministic modification times."""
     hist_dir = tmp_path / "show_hist"
     hist_dir.mkdir()
-    stats = {}
-    base_dt = datetime.datetime(2025, 1, 2, 10, 0, 0, tzinfo=datetime.timezone.utc)
-    f1_path = hist_dir / "report-boot1-20250102T100000Z.jsonl.gz"; f1_path.touch()
-    f2_path = hist_dir / "report-boot1-20250102T090000Z.jsonl.gz"; f2_path.touch()
-    f3_path = hist_dir / "report-boot0-20250101T120000Z.jsonl.gz"; f3_path.touch()
-    mtime1 = base_dt.timestamp(); os.utime(f1_path, (mtime1, mtime1)); stats[str(f1_path)] = MagicMock(st_size=20480, st_mtime=mtime1, st_mode=stat_module.S_IFREG)
-    mtime2 = (base_dt - datetime.timedelta(hours=1)).timestamp(); os.utime(f2_path, (mtime2, mtime2)); stats[str(f2_path)] = MagicMock(st_size=15360, st_mtime=mtime2, st_mode=stat_module.S_IFREG)
-    mtime3 = (base_dt - datetime.timedelta(days=1)).timestamp(); os.utime(f3_path, (mtime3, mtime3)); stats[str(f3_path)] = MagicMock(st_size=5120, st_mtime=mtime3, st_mode=stat_module.S_IFREG)
-    original_os_stat = os.stat
-    def os_stat_side_effect(*args, **kwargs):
-        path_arg = args[0] if args else None; path_str = str(path_arg)
-        if path_str in stats:
-            return stats[path_str]
-        else:
-            try:
-                return original_os_stat(*args, **kwargs)
-            except FileNotFoundError:
-                 raise FileNotFoundError(f"Mocked os.stat: Original stat failed for {path_arg}")
-            except Exception as e:
-                 print(f"Warning: Mocked os.stat encountered error calling original os.stat for {path_arg}: {e}")
-                 raise
-    with patch('os.stat', side_effect=os_stat_side_effect) as mock_stat:
-        yield hist_dir
+
+    # Define files and their corresponding timestamps to guarantee sorting order
+    files_to_create = {
+        "report-boot1-20250102T100000Z.jsonl.gz": datetime.datetime(2025, 1, 2, 10, 0, 0, tzinfo=datetime.timezone.utc), # Newest
+        "report-boot1-20250102T090000Z.jsonl.gz": datetime.datetime(2025, 1, 2, 9, 0, 0, tzinfo=datetime.timezone.utc),  # Second newest
+        "report-boot0-20250101T120000Z.jsonl.gz": datetime.datetime(2025, 1, 1, 12, 0, 0, tzinfo=datetime.timezone.utc), # Third newest
+        "report-oldest-to-be-excluded.jsonl.gz": datetime.datetime(2025, 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)   # Oldest
+    }
+
+    for filename, dt in files_to_create.items():
+        file_path = hist_dir / filename
+        file_path.touch()
+        # Set the modification time to the exact, deterministic timestamp from the filename
+        mtime = dt.timestamp()
+        os.utime(file_path, (mtime, mtime))
+
+    yield hist_dir
+
 
 @patch('sysdiag_analyzer.main.load_config')
 def test_show_history_success_rich(mock_load_config, mock_history_dir_show, runner):
-    # ... (test logic remains the same) ...
+    """Test the show-history command with a limit, checking for correct sorting and exclusion."""
     mock_load_config.return_value = {"history": {"directory": str(mock_history_dir_show)}}
     result = runner.invoke(app, ["show-history", "-n", "3"])
-    assert result.exit_code == 0; output = result.stdout
-    assert "Recent Analysis Reports" in output
+
+    assert result.exit_code == 0
+    output = result.stdout
+    print(output)
+    # Check that the title and the three newest files are present
+    assert "Recent Analysis Reports (Last 3)" in output
     assert "report-boot1-20250102T100000Z.jsonl.gz" in output
-    assert "20.0" in output
+    assert "report-boot1-20250102T090000Z.jsonl.gz" in output
+    assert "report-boot0-20250101T120000Z.jsonl.gz" in output
+
+    # Crucially, check that the oldest file was excluded by the limit
+    assert "report-oldest-to-be-excluded.jsonl.gz" not in output
+
     mock_load_config.assert_called_once_with(config_path_override=None)
 
-# --- Test `retrain-ml` Command (No changes needed) ---
 pytestmark_ml = pytest.mark.skipif(not HAS_ML_LIBS_FOR_TEST, reason="Requires ML libraries")
 @pytestmark_ml
 @patch('sysdiag_analyzer.main.ml_engine.load_and_prepare_data')
@@ -366,7 +361,6 @@ pytestmark_ml = pytest.mark.skipif(not HAS_ML_LIBS_FOR_TEST, reason="Requires ML
 @patch('pathlib.Path.mkdir')
 @patch('pathlib.Path.exists')
 def test_retrain_ml_success(mock_exists, mock_mkdir, mock_load_config, mock_check_priv, mock_train, mock_engineer, mock_load_prep, runner, mock_default_config):
-    # ... (test logic remains the same) ...
     mock_load_config.return_value = mock_default_config
     model_path = Path(mock_default_config["models"]["directory"])
     history_path = Path(mock_default_config["history"]["directory"])

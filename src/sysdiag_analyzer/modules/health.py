@@ -1,7 +1,5 @@
 import logging
 import json
-import subprocess
-import datetime # Needed for log timestamp formatting
 from typing import List, Optional, Tuple, Dict, Any
 
 try:
@@ -254,9 +252,7 @@ def _get_unit_logs(unit_name: str, num_lines: int = 20) -> List[str]:
     logs = []
     error_msg = None
     log.debug(f"Fetching last {num_lines} logs for unit: {unit_name} (Native Preferred: {HAS_NATIVE_JOURNAL})")
-    native_attempted = False
     if HAS_NATIVE_JOURNAL:
-        native_attempted = True
         reader = None
         try:
             log.debug(f"Attempting native journal read for {unit_name}...")

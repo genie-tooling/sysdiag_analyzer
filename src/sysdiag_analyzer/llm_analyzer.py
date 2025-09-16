@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import abc
 from pathlib import Path # Import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, Tuple
 
 # Conditional import for Ollama
 try:
@@ -142,7 +142,8 @@ def _generate_historical_summary(
         historical_counts: Dict[str, int] = {}
 
         for past_report in historical_reports:
-            if not isinstance(past_report, dict): continue
+            if not isinstance(past_report, dict):
+                continue
             past_features = extract_features_from_report(past_report)
             past_units_failed = set()
             past_units_flapping = set()
@@ -152,25 +153,34 @@ def _generate_historical_summary(
             for feature in past_features:
                 unit = feature.get("unit_name")
                 source = feature.get("source")
-                if not unit: continue
+                if not unit:
+                    continue
                 if source == "health_analysis":
-                    if feature.get("is_failed"): past_units_failed.add(unit)
-                    if feature.get("is_flapping"): past_units_flapping.add(unit)
+                    if feature.get("is_failed"):
+                        past_units_failed.add(unit)
+                    if feature.get("is_flapping"):
+                        past_units_flapping.add(unit)
                 elif source == "ml_analysis":
                     # This depends on how past ML results are stored/extracted
                     # Assuming a hypothetical 'is_anomalous' flag for simplicity
-                    if feature.get("is_anomalous"): past_units_anomalous.add(unit)
+                    if feature.get("is_anomalous"):
+                        past_units_anomalous.add(unit)
                 elif source == "log_analysis":
                     pattern = feature.get("pattern_key")
-                    if pattern: past_log_patterns.add(pattern)
+                    if pattern:
+                        past_log_patterns.add(pattern)
 
             for unit in current_problem_units:
-                if unit in past_units_failed: historical_counts[f"{unit}:failed"] = historical_counts.get(f"{unit}:failed", 0) + 1
-                if unit in past_units_flapping: historical_counts[f"{unit}:flapping"] = historical_counts.get(f"{unit}:flapping", 0) + 1
+                if unit in past_units_failed:
+                    historical_counts[f"{unit}:failed"] = historical_counts.get(f"{unit}:failed", 0) + 1
+                if unit in past_units_flapping:
+                    historical_counts[f"{unit}:flapping"] = historical_counts.get(f"{unit}:flapping", 0) + 1
             for unit in current_anomalous_units:
-                if unit in past_units_anomalous: historical_counts[f"{unit}:anomaly"] = historical_counts.get(f"{unit}:anomaly", 0) + 1
+                if unit in past_units_anomalous:
+                    historical_counts[f"{unit}:anomaly"] = historical_counts.get(f"{unit}:anomaly", 0) + 1
             for pattern in current_log_patterns:
-                if pattern in past_log_patterns: historical_counts[f"log:{pattern}"] = historical_counts.get(f"log:{pattern}", 0) + 1
+                if pattern in past_log_patterns:
+                    historical_counts[f"log:{pattern}"] = historical_counts.get(f"log:{pattern}", 0) + 1
 
         if not historical_counts:
             summary_lines.append("No relevant issues found in recent history.")
@@ -179,8 +189,10 @@ def _generate_historical_summary(
             for key, count in sorted(historical_counts.items()):
                 if count > 0:
                     parts = key.split(":")
-                    if parts[0] == "log": summary_lines.append(f"- Log pattern '{parts[1]}' appeared in {count} report(s).")
-                    elif len(parts) == 2: summary_lines.append(f"- Unit '{parts[0]}' showed issue '{parts[1]}' in {count} report(s).")
+                    if parts[0] == "log":
+                        summary_lines.append(f"- Log pattern '{parts[1]}' appeared in {count} report(s).")
+                    elif len(parts) == 2:
+                        summary_lines.append(f"- Unit '{parts[0]}' showed issue '{parts[1]}' in {count} report(s).")
 
     except Exception as e:
         log_llm.exception("Error generating historical summary.")
@@ -238,62 +250,91 @@ def _create_llm_prompt(report: SystemReport, historical_summary: str) -> str:
     prompt_parts.append(f"- Boot ID: {report.boot_id or 'N/A'}")
     if report.boot_analysis:
         prompt_parts.append("\n### Boot Analysis Summary:")
-        if report.boot_analysis.times and report.boot_analysis.times.total: prompt_parts.append(f"- Total Boot Time: {report.boot_analysis.times.total}")
-        if report.boot_analysis.blame_error: prompt_parts.append(f"- Blame Error: {report.boot_analysis.blame_error}")
-        if report.boot_analysis.critical_chain_error: prompt_parts.append(f"- Critical Chain Error: {report.boot_analysis.critical_chain_error}")
-        if report.boot_analysis.critical_chain: prompt_parts.append(f"- Critical Chain: {len(report.boot_analysis.critical_chain)} units identified.")
+        if report.boot_analysis.times and report.boot_analysis.times.total:
+            prompt_parts.append(f"- Total Boot Time: {report.boot_analysis.times.total}")
+        if report.boot_analysis.blame_error:
+            prompt_parts.append(f"- Blame Error: {report.boot_analysis.blame_error}")
+        if report.boot_analysis.critical_chain_error:
+            prompt_parts.append(f"- Critical Chain Error: {report.boot_analysis.critical_chain_error}")
+        if report.boot_analysis.critical_chain:
+            prompt_parts.append(f"- Critical Chain: {len(report.boot_analysis.critical_chain)} units identified.")
     if report.health_analysis:
         prompt_parts.append("\n### Health Analysis Summary:")
         ha = report.health_analysis
         issues = []
-        if ha.failed_units: issues.append(f"{len(ha.failed_units)} failed units ({', '.join([u.name for u in ha.failed_units[:3]])}{'...' if len(ha.failed_units) > 3 else ''})")
-        if ha.flapping_units: issues.append(f"{len(ha.flapping_units)} flapping units ({', '.join([u.name for u in ha.flapping_units[:3]])}{'...' if len(ha.flapping_units) > 3 else ''})")
-        if ha.problematic_sockets: issues.append(f"{len(ha.problematic_sockets)} problematic sockets")
-        if ha.problematic_timers: issues.append(f"{len(ha.problematic_timers)} problematic timers")
-        if issues: prompt_parts.append(f"- Issues Found: {'; '.join(issues)}")
-        else: prompt_parts.append("- No major health issues detected.")
-        if ha.analysis_error: prompt_parts.append(f"- Analysis Error: {ha.analysis_error}")
+        if ha.failed_units:
+            issues.append(f"{len(ha.failed_units)} failed units ({', '.join([u.name for u in ha.failed_units[:3]])}{'...' if len(ha.failed_units) > 3 else ''})")
+        if ha.flapping_units:
+            issues.append(f"{len(ha.flapping_units)} flapping units ({', '.join([u.name for u in ha.flapping_units[:3]])}{'...' if len(ha.flapping_units) > 3 else ''})")
+        if ha.problematic_sockets:
+            issues.append(f"{len(ha.problematic_sockets)} problematic sockets")
+        if ha.problematic_timers:
+            issues.append(f"{len(ha.problematic_timers)} problematic timers")
+        if issues:
+            prompt_parts.append(f"- Issues Found: {'; '.join(issues)}")
+        else:
+            prompt_parts.append("- No major health issues detected.")
+        if ha.analysis_error:
+            prompt_parts.append(f"- Analysis Error: {ha.analysis_error}")
     if report.resource_analysis:
         prompt_parts.append("\n### Resource Analysis Summary:")
         ra = report.resource_analysis
         if ra.system_usage:
             sys_usage_parts = []
-            if ra.system_usage.cpu_percent is not None: sys_usage_parts.append(f"CPU {ra.system_usage.cpu_percent:.1f}%")
-            if ra.system_usage.mem_percent is not None: sys_usage_parts.append(f"Mem {ra.system_usage.mem_percent:.1f}%")
-            if ra.system_usage.swap_percent is not None: sys_usage_parts.append(f"Swap {ra.system_usage.swap_percent:.1f}%")
-            if sys_usage_parts: prompt_parts.append(f"- System Usage: {', '.join(sys_usage_parts)}")
-            if ra.system_usage.error: prompt_parts.append(f"- System Usage Error: {ra.system_usage.error}")
-        if ra.top_cpu_units: prompt_parts.append(f"- Top CPU: {ra.top_cpu_units[0].name} ({ra.top_cpu_units[0].cpu_usage_nsec / 1e9:.1f}s){', ...' if len(ra.top_cpu_units) > 1 else ''}")
-        if ra.top_memory_units: prompt_parts.append(f"- Top Memory: {ra.top_memory_units[0].name} ({ra.top_memory_units[0].memory_current_bytes / 1024**2:.1f}MiB){', ...' if len(ra.top_memory_units) > 1 else ''}")
+            if ra.system_usage.cpu_percent is not None:
+                sys_usage_parts.append(f"CPU {ra.system_usage.cpu_percent:.1f}%")
+            if ra.system_usage.mem_percent is not None:
+                sys_usage_parts.append(f"Mem {ra.system_usage.mem_percent:.1f}%")
+            if ra.system_usage.swap_percent is not None:
+                sys_usage_parts.append(f"Swap {ra.system_usage.swap_percent:.1f}%")
+            if sys_usage_parts:
+                prompt_parts.append(f"- System Usage: {', '.join(sys_usage_parts)}")
+            if ra.system_usage.error:
+                prompt_parts.append(f"- System Usage Error: {ra.system_usage.error}")
+        if ra.top_cpu_units:
+            prompt_parts.append(f"- Top CPU: {ra.top_cpu_units[0].name} ({ra.top_cpu_units[0].cpu_usage_nsec / 1e9:.1f}s){', ...' if len(ra.top_cpu_units) > 1 else ''}")
+        if ra.top_memory_units:
+            prompt_parts.append(f"- Top Memory: {ra.top_memory_units[0].name} ({ra.top_memory_units[0].memory_current_bytes / 1024**2:.1f}MiB){', ...' if len(ra.top_memory_units) > 1 else ''}")
         if ra.top_io_units:
             top_io_total = (ra.top_io_units[0].io_read_bytes or 0) + (ra.top_io_units[0].io_write_bytes or 0)
             prompt_parts.append(f"- Top I/O: {ra.top_io_units[0].name} ({top_io_total / 1024**2:.1f}MiB){', ...' if len(ra.top_io_units) > 1 else ''}")
-        if ra.analysis_error: prompt_parts.append(f"- Analysis Error: {ra.analysis_error}")
+        if ra.analysis_error:
+            prompt_parts.append(f"- Analysis Error: {ra.analysis_error}")
     if report.log_analysis:
         prompt_parts.append("\n### Log Analysis Summary:")
         la = report.log_analysis
         patterns = []
         oom_count = 0
         for p in la.detected_patterns:
-            if p.pattern_type == "OOM": oom_count += p.count
-            else: patterns.append(f"{p.pattern_key} ({p.count})")
-        if oom_count > 0: prompt_parts.append(f"- OOM Events: {oom_count}")
-        if patterns: prompt_parts.append(f"- Detected Patterns: {', '.join(patterns[:5])}{'...' if len(patterns) > 5 else ''}")
-        if not patterns and oom_count == 0: prompt_parts.append("- No significant error/warning patterns detected.")
-        if la.analysis_error: prompt_parts.append(f"- Analysis Error: {la.analysis_error}")
+            if p.pattern_type == "OOM":
+                oom_count += p.count
+            else:
+                patterns.append(f"{p.pattern_key} ({p.count})")
+        if oom_count > 0:
+            prompt_parts.append(f"- OOM Events: {oom_count}")
+        if patterns:
+            prompt_parts.append(f"- Detected Patterns: {', '.join(patterns[:5])}{'...' if len(patterns) > 5 else ''}")
+        if not patterns and oom_count == 0:
+            prompt_parts.append("- No significant error/warning patterns detected.")
+        if la.analysis_error:
+            prompt_parts.append(f"- Analysis Error: {la.analysis_error}")
     if report.dependency_analysis and report.dependency_analysis.failed_unit_dependencies:
         prompt_parts.append("\n### Dependency Analysis Summary (Failed Units):")
         da = report.dependency_analysis
         for unit_dep_info in da.failed_unit_dependencies[:3]:
             problematic_deps = [d.name for d in unit_dep_info.dependencies if d.is_problematic]
-            if problematic_deps: prompt_parts.append(f"- {unit_dep_info.unit_name}: Problematic dependencies -> {', '.join(problematic_deps)}")
-        if len(da.failed_unit_dependencies) > 3: prompt_parts.append("- ... (more units)")
-        if da.analysis_error: prompt_parts.append(f"- Analysis Error: {da.analysis_error}")
+            if problematic_deps:
+                prompt_parts.append(f"- {unit_dep_info.unit_name}: Problematic dependencies -> {', '.join(problematic_deps)}")
+        if len(da.failed_unit_dependencies) > 3:
+            prompt_parts.append("- ... (more units)")
+        if da.analysis_error:
+            prompt_parts.append(f"- Analysis Error: {da.analysis_error}")
     if report.full_dependency_analysis and report.full_dependency_analysis.detected_cycles:
          prompt_parts.append("\n### Full Dependency Graph Summary:")
          fda = report.full_dependency_analysis
          prompt_parts.append(f"- Detected {len(fda.detected_cycles)} dependency cycle(s).")
-         if fda.analysis_error: prompt_parts.append(f"- Analysis Error: {fda.analysis_error}")
+         if fda.analysis_error:
+            prompt_parts.append(f"- Analysis Error: {fda.analysis_error}")
     if report.ml_analysis: # Check if ml_analysis exists first
         prompt_parts.append("\n### ML Anomaly Detection Summary:")
         mla = report.ml_analysis
@@ -302,8 +343,8 @@ def _create_llm_prompt(report: SystemReport, historical_summary: str) -> str:
              prompt_parts.append(f"- Detected Anomalies: {', '.join(anomalies_summary)}{'...' if len(mla.anomalies_detected) > 3 else ''}")
         else:
              prompt_parts.append("- No anomalies detected.")
-        # FIX: Use correct attribute name 'error' instead of 'analysis_error'
-        if mla.error: prompt_parts.append(f"- Analysis Error: {mla.error}")
+        if mla.error:
+            prompt_parts.append(f"- Analysis Error: {mla.error}")
     prompt_parts.append("\n### Historical Context Summary:")
     prompt_parts.append(historical_summary if historical_summary else "No historical summary generated.")
     prompt_parts.append("---")

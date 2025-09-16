@@ -1,10 +1,10 @@
 import pytest
 import logging # <-- Import added
-from unittest.mock import patch, MagicMock, call, ANY
+from unittest.mock import patch, MagicMock
 
 # Module to test
 from sysdiag_analyzer.modules import dependencies
-from sysdiag_analyzer.datatypes import UnitHealthInfo, DependencyAnalysisResult, FailedUnitDependencyInfo, DependencyInfo
+from sysdiag_analyzer.datatypes import UnitHealthInfo, DependencyAnalysisResult, DependencyInfo
 
 # Conditional DBus imports for potential future tests
 try:

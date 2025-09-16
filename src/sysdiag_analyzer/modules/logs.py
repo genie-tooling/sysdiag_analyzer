@@ -2,8 +2,7 @@ import logging
 import re
 import json
 import datetime
-import collections
-from typing import List, Optional, Tuple, Dict, Any
+from typing import Optional, Dict, Any
 
 # Use relative import for journal helpers from boot module
 try:
@@ -195,7 +194,8 @@ def analyze_general_logs(
 
                     level_str = LOG_LEVEL_MAP.get(priority) if prio_val is not None else None
 
-                    if not message: continue # Skip if no message content
+                    if not message:
+                        continue # Skip if no message content
 
                     # --- Pattern Matching ---
                     # Check OOM
@@ -210,7 +210,8 @@ def analyze_general_logs(
                             _update_pattern_counts(pattern_counts, "Error", key, level_str, entry_data, timestamp)
                             error_matched = True
                             break # Count first matching error pattern per message
-                    if error_matched: continue
+                    if error_matched:
+                        continue
 
                     # Check Warnings
                     for key, pattern in COMMON_WARNING_PATTERNS.items():
@@ -237,7 +238,8 @@ def analyze_general_logs(
             if reader and hasattr(reader, 'close'):
                 try:
                     reader.close()
-                except Exception: pass
+                except Exception:
+                    pass
 
     # --- Fallback Path (journalctl) ---
     if not native_success:
@@ -268,13 +270,14 @@ def analyze_general_logs(
             result.detected_patterns = list(pattern_counts.values()) # Ensure list is empty
             return result
 
-        log.debug(f"Parsing journalctl JSON output...")
+        log.debug("Parsing journalctl JSON output...")
         try:
             lines = stdout.splitlines()
             log.debug(f"Read {len(lines)} lines from journalctl.")
             for line in lines:
                 # Fallback doesn't need MAX_ENTRIES check here, journalctl already limited output size implicitly
-                if not line.strip(): continue
+                if not line.strip():
+                    continue
 
                 try:
                     entry_data = json.loads(line)
@@ -289,7 +292,8 @@ def analyze_general_logs(
                 prio_val = entry_data.get("PRIORITY")
                 level_str = LOG_LEVEL_MAP.get(int(prio_val)) if prio_val is not None else None
 
-                if not message: continue
+                if not message:
+                    continue
 
                 # --- Pattern Matching (same logic as native) ---
                 # Check OOM
@@ -304,7 +308,8 @@ def analyze_general_logs(
                         _update_pattern_counts(pattern_counts, "Error", key, level_str, entry_data, timestamp)
                         error_matched = True
                         break
-                if error_matched: continue
+                if error_matched:
+                    continue
 
                 # Check Warnings
                 for key, pattern in COMMON_WARNING_PATTERNS.items():

@@ -1,3 +1,7 @@
+Of course. Here is the updated `README.md` content, integrating detailed sections on `config.toml` and the specific steps required to enable eBPF functionality.
+
+---
+
 # sysdiag-analyzer
 
 [![Python Package CI](https://github.com/systemd-smartfilter-architect/sysdiag-analyzer/actions/workflows/python-test.yml/badge.svg)](https://github.com/systemd-smartfilter-architect/sysdiag-analyzer/actions/workflows/python-test.yml)
@@ -27,7 +31,7 @@ ML anomaly detection, LLM synthesis, and eBPF tracing for deep insights.
 *   **eBPF Process Tracing (Optional):**
     *   Traces process `exec` and `exit` events system-wide during the analysis run (`bcc` required).
     *   Provides insights into short-lived processes or unexpected executions.
-    *   Requires **root privileges** and potentially matching kernel headers.
+    *   Requires **root privileges** and specific system libraries (see Prerequisites).
 *   **Historical Persistence:** Saves reports (JSONL.gz) to `/var/lib/sysdiag-analyzer/history/` (configurable), applies retention policy.
 *   **ML Anomaly Detection (Basic):**
     *   Trains `IsolationForest` per unit on historical metrics (`.[ml]` extras required).
@@ -41,13 +45,51 @@ ML anomaly detection, LLM synthesis, and eBPF tracing for deep insights.
 *   Linux system with **systemd** and **cgroup v2** enabled.
 *   Access to systemd (DBus preferred), journald, `/sys/fs/cgroup`, `/proc`.
 *   **Root privileges** generally required for full data access, eBPF, and default history/model saving.
-*   **Core Dependencies:** `typer[all]`, `rich`, `psutil`, `tomli` (Python < 3.11).
+*   **Core Dependencies:** `typer[all]`, `rich`, `psutil`, `tomli` (Python < 3.11), `pygments`.
 *   **(Optional)** `cysystemd`, `dbus-python` (`.[native]`)
-*   **(Optional Extras)** `networkx` (`.[full-graph]`), `pandas`, `scikit-learn`, `joblib` (`.[ml]`), `ollama` (`.[llm]`), `bcc` (`.[ebpf]`).
+*   **(Optional Extras)** `networkx` (`.[full-graph]`), `pandas`, `scikit-learn`, `joblib` (`.[ml]`), `ollama` (`.[llm]`).
+
+*   **(Optional for eBPF Tracing)**: Enabling the `--enable-ebpf` flag has specific system requirements:
+    1.  **BCC (BPF Compiler Collection):** The `bcc` library and tools must be installed.
+    2.  **Kernel Headers:** You must have the kernel headers matching your currently running kernel.
+    3.  **Root Privileges:** The feature must be run with `sudo` or as root.
+
+    **Example Installation:**
+    *   **Debian / Ubuntu:**
+        ```bash
+        sudo apt update && sudo apt install -y bpfcc-tools libbpfcc-dev linux-headers-$(uname -r)
+        ```
+    *   **Fedora / CentOS Stream / RHEL:**
+        ```bash
+        sudo dnf install -y bcc bcc-devel kernel-devel
+        ```
 
 ## Configuration (Optional)
 
-Optional TOML file: `/etc/sysdiag-analyzer/config.toml` or `~/.config/sysdiag-analyzer/config.toml`. See `MAN.md` for details.
+While `sysdiag-analyzer` works out-of-the-box with sensible defaults, its advanced features can be customized via a TOML configuration file.
+
+**Locations:**
+The tool searches for `config.toml` in the following order, with settings from later files overriding earlier ones:
+1.  System-wide: `/etc/sysdiag-analyzer/config.toml`
+2.  User-specific: `~/.config/sysdiag-analyzer/config.toml`
+3.  A custom path can be specified with the global `--config` option.
+
+You can always see the final, merged configuration that is being used by running:```bash
+sysdiag-analyzer config show
+```
+
+**Key Settings:**
+*   `[llm]`: Configure the Large Language Model for report synthesis.
+    *   `provider`: Set to `"ollama"` to use a local Ollama instance.
+    *   `model`: Specify the model name to use (e.g., `"llama3:latest"`). This model must be downloaded in your Ollama instance.
+    *   `host`: (Optional) The URL of the Ollama API if it's not running on `http://localhost:11434`.
+*   `[history]`: Customize data persistence.
+    *   `directory`: Change the default path (`/var/lib/sysdiag-analyzer/history`) where analysis reports are saved.
+    *   `max_files`: Set the number of old reports to keep.
+*   `[models]`: Customize Machine Learning model storage.
+    *   `directory`: Change the default path (`/var/lib/sysdiag-analyzer/models`) where trained ML models are saved.
+
+For a full list of all configuration options, please refer to the `MAN.md` file or the `config.toml.example` file included in the source code.
 
 ## Installation
 
@@ -56,8 +98,8 @@ Optional TOML file: `/etc/sysdiag-analyzer/config.toml` or `~/.config/sysdiag-an
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install base package
-pip install .
+# Install base package (includes pygments for highlighting)
+pip install . "pygments"
 
 # Install optional features (choose needed extras)
 # Example: pip install ".[ml,llm,ebpf]"
@@ -98,8 +140,6 @@ sysdiag-analyzer config show
 *   **Child Processes:** Useful for identifying resource usage by workloads (like containers) started by systemd services (e.g., `docker.service`). High aggregate CPU/Memory for a command under a specific parent unit warrants investigation.
 
 ## Development
-
-See `CONTRIBUTING.md`.
 
 ```bash
 # Basic dev workflow

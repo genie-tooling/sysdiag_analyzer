@@ -1,10 +1,9 @@
 # -*- coding: utf-8 -*-
-# Phase 10: eBPF Monitoring Module
 
 import logging
 import time
 import ctypes as ct
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 
 # Conditional BCC import
 try:
@@ -14,7 +13,7 @@ try:
 except ImportError as e:
     HAS_BCC = False
     BPF = None # type: ignore
-    printb = lambda x: print(x) # Dummy printb
+    printb = lambda x: print(x) # Dummy printb  # noqa: E731
     print(f"BCC import error: {e}")
 
 from ..datatypes import EBPFAnalysisResult, EBPFExecEvent, EBPFExitEvent

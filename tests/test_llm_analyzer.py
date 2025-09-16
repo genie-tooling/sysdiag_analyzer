@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 import pytest
 from unittest.mock import patch, MagicMock
-from pathlib import Path # Import Path
 
 # Module to test
 from sysdiag_analyzer import llm_analyzer
@@ -87,9 +86,11 @@ def mock_historical_data_llm(mock_history_dir_llm): # Depends on the temp dir fi
         def extract_side_effect(report_dict):
             features = []
             if report_dict.get("health_analysis", {}).get("failed_units"):
-                for u in report_dict["health_analysis"]["failed_units"]: features.append({"unit_name": u["name"], "source": "health_analysis", "is_failed": True})
+                for u in report_dict["health_analysis"]["failed_units"]:
+                    features.append({"unit_name": u["name"], "source": "health_analysis", "is_failed": True})
             if report_dict.get("ml_analysis", {}).get("anomalies_detected"):
-                 for a in report_dict["ml_analysis"]["anomalies_detected"]: features.append({"unit_name": a["unit_name"], "source": "ml_analysis", "is_anomalous": True})
+                 for a in report_dict["ml_analysis"]["anomalies_detected"]:
+                    features.append({"unit_name": a["unit_name"], "source": "ml_analysis", "is_anomalous": True})
             return features
         mock_extract.side_effect = extract_side_effect
         yield mock_load, mock_extract # Yield mocks if needed

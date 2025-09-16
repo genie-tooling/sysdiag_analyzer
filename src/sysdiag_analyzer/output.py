@@ -1,30 +1,37 @@
 # src/sysdiag_analyzer/output.py
 # -*- coding: utf-8 -*-
 
+import datetime
 import json
 import logging
-from typing import Optional, List, Any, Dict # Added Dict
 from dataclasses import asdict
-import datetime
+from typing import Any, List, Optional  # Added Dict
 
-from rich.console import Console, Group # Correctly import Group
-from rich.panel import Panel
-from rich.table import Table, Column
-from rich.text import Text
+try:
+    from pygments.util import ClassNotFound
+except ImportError:
+    ClassNotFound = Exception  # Fallback if pygments isn't installed
+
+from rich.console import Console, Group  # Correctly import Group
+from rich.markdown import Markdown  # Added for LLM output
 from rich.padding import Padding
+from rich.panel import Panel
 from rich.syntax import Syntax
-from rich.pretty import pretty_repr
-from rich.markdown import Markdown # Added for LLM output
+from rich.table import Table
+from rich.text import Text
 
 # Import specific datatypes for type hinting
 from .datatypes import (
-    BootAnalysisResult, SystemReport, HealthAnalysisResult,
-    ResourceAnalysisResult, LogAnalysisResult, LogPatternInfo,
-    DependencyAnalysisResult, FailedUnitDependencyInfo, DependencyInfo,
-    FullDependencyAnalysisResult, MLAnalysisResult, LLMAnalysisResult,
-    EBPFAnalysisResult, EBPFExecEvent, EBPFExitEvent,
-    ChildProcessGroupUsage, AnomalyInfo, UnitHealthInfo,
-    UnitResourceUsage, SystemResourceUsage, BootTimes
+    BootAnalysisResult,
+    DependencyAnalysisResult,
+    EBPFAnalysisResult,
+    FullDependencyAnalysisResult,
+    HealthAnalysisResult,
+    LLMAnalysisResult,
+    LogAnalysisResult,
+    MLAnalysisResult,
+    ResourceAnalysisResult,
+    SystemReport,
 )
 
 log = logging.getLogger(__name__)
@@ -33,6 +40,7 @@ log = logging.getLogger(__name__)
 MAX_EXAMPLE_MESSAGES: int = 3
 MAX_CYCLES_TO_SHOW: int = 20
 MAX_EBPF_EVENTS_TO_SHOW: int = 20
+
 
 # --- Helper Functions ---
 def _format_bytes(byte_count: Optional[int]) -> str:
@@ -48,6 +56,7 @@ def _format_bytes(byte_count: Optional[int]) -> str:
     else:
         return f"{byte_count / (1024**3):.1f} GiB"
 
+
 def _format_nanoseconds(nsec_count: Optional[int]) -> str:
     """Formats nanoseconds into human-readable seconds or milliseconds."""
     if nsec_count is None:
@@ -59,33 +68,85 @@ def _format_nanoseconds(nsec_count: Optional[int]) -> str:
         msec = sec * 1000
         return f"{msec:.1f} ms"
 
-def _format_log_snippet(logs: List[str], max_lines: int = 3) -> Text:
-    """Formats a log snippet, showing the last few lines."""
+
+def _format_seconds(sec_count: Optional[float]) -> str:
+    """Formats seconds into a human-readable string (s, m, h)."""
+    if sec_count is None:
+        return "[dim]n/a[/dim]"
+    if sec_count < 60.0:
+        return f"{sec_count:.2f}s"
+    minutes = sec_count / 60.0
+    if minutes < 60.0:
+        return f"{minutes:.1f}m"
+    hours = minutes / 60.0
+    return f"{hours:.1f}h"
+
+
+def _format_log_snippet(logs: List[str], max_lines: int = 3) -> Any:
+    """
+    Formats a log snippet, returning the most appropriate Rich renderable
+    (Text, Syntax, or Group).
+    """
     if not logs:
         return Text("[dim](No logs available)[/dim]")
     if len(logs) == 1 and logs[0].startswith("[Error fetching logs:"):
         return Text(f"[red]{logs[0]}[/red]")
+
     display_logs = logs[-max_lines:]
     num_omitted = len(logs) - len(display_logs)
-    text = Text()
-    if num_omitted > 0:
-        text.append(f"[dim]... ({num_omitted} older lines omitted) ...[/dim]\n")
     log_content = "\n".join(display_logs)
+
+    renderable_parts = []
+
+    # 1. Create the header if necessary
+    if num_omitted > 0:
+        header = Text(f"[dim]... ({num_omitted} older lines omitted) ...[/dim]\n")
+        renderable_parts.append(header)
+
+    # 2. Create the main content (either Syntax or plain Text)
     lexer = "log" if any(c in log_content for c in "[]:=") else "text"
     try:
-        syntax = Syntax(log_content, lexer, theme="default", line_numbers=False, word_wrap=True)
-        text.append(syntax)
+        # If syntax highlighting works, add the Syntax object
+        syntax_block = Syntax(
+            log_content, lexer, theme="default", line_numbers=False, word_wrap=True
+        )
+        renderable_parts.append(syntax_block)
+    except ClassNotFound:
+        log.warning(
+            f"Pygments lexer '{lexer}' not found (is 'pygments' installed?). Falling back to plain text."
+        )
+        # If it fails, add the raw content as a Text object
+        renderable_parts.append(Text(log_content))
     except Exception:
-        log.warning(f"Syntax highlighting failed for lexer '{lexer}'. Falling back to plain text.")
-        text.append(log_content)
-    return text
+        log.warning(
+            f"Syntax highlighting failed for lexer '{lexer}'. Falling back to plain text."
+        )
+        renderable_parts.append(Text(log_content))
+
+    # 3. Return the correct renderable type
+    if not renderable_parts:
+        return Text("")  # Should not happen, but a safe fallback
+    elif len(renderable_parts) == 1:
+        # If it's just the syntax block or just the header, return it directly
+        return renderable_parts[0]
+    else:
+        # If we have a header AND content, group them.
+        # The Table cell will render the group correctly.
+        return Group(*renderable_parts)
+
 
 # --- Analysis Section Formatting ---
 def format_boot_report(result: Optional[BootAnalysisResult], console: Console) -> None:
     """Formats and prints the Boot Analysis results using Rich."""
     log.debug(f"format_boot_report called with result object: {result is not None}")
     if not result:
-        console.print(Panel("[yellow]Boot analysis data is not available.[/yellow]", title="Boot Analysis", border_style="dim"))
+        console.print(
+            Panel(
+                "[yellow]Boot analysis data is not available.[/yellow]",
+                title="Boot Analysis",
+                border_style="dim",
+            )
+        )
         return
 
     content_parts: List[Any] = []
@@ -108,11 +169,17 @@ def format_boot_report(result: Optional[BootAnalysisResult], console: Console) -
                 times_str_parts.append(f"Userspace: [bold]{result.times.userspace}[/bold]")
             if result.times.total:
                 times_str_parts.append(f"Total: [bold]{result.times.total}[/bold]")
-            times_str = " + ".join(p for p in times_str_parts if ": [bold]None[/bold]" not in p and ": [bold][/bold]" not in p)
+            times_str = " + ".join(
+                p
+                for p in times_str_parts
+                if ": [bold]None[/bold]" not in p and ": [bold][/bold]" not in p
+            )
             if times_str:
-                 content_parts.append(f"[dim]Times:[/dim] {times_str}")
+                content_parts.append(f"[dim]Times:[/dim] {times_str}")
             else:
-                 content_parts.append("[dim]Times:[/dim] [yellow]No specific timing data parsed.[/yellow]")
+                content_parts.append(
+                    "[dim]Times:[/dim] [yellow]No specific timing data parsed.[/yellow]"
+                )
     else:
         content_parts.append("[dim]Times:[/dim] [yellow]Timing data unavailable.[/yellow]")
 
@@ -120,45 +187,55 @@ def format_boot_report(result: Optional[BootAnalysisResult], console: Console) -
     if content_parts:
         content_parts.append("")
     if result.blame_error:
-         content_parts.append(f"[dim]Blame (Journal):[/dim] [red]Error: {result.blame_error}[/red]")
+        content_parts.append(
+            f"[dim]Blame (Journal):[/dim] [red]Error: {result.blame_error}[/red]"
+        )
     elif result.blame:
-        table = Table(title="Unit Activation Times (Journal Analysis - Top 20)", show_header=True, header_style="bold magenta", expand=True)
+        table = Table(
+            title="Unit Activation Times (Journal Analysis - Top 20)",
+            show_header=True,
+            header_style="bold magenta",
+            expand=True,
+        )
         table.add_column("Time", style="dim", width=10, no_wrap=True)
         table.add_column("Unit", style="cyan")
         limit = 20
         for i, item in enumerate(result.blame):
-             if i >= limit:
-                  table.add_row("...", f"({len(result.blame) - limit} more)")
-                  break
-             table.add_row(item.time, item.unit)
+            if i >= limit:
+                table.add_row("...", f"({len(result.blame) - limit} more)")
+                break
+            table.add_row(item.time, item.unit)
         content_parts.append(table)
     else:
-         content_parts.append("[dim]Blame (Journal):[/dim] [yellow]No unit timing data found or parsed from journal.[/yellow]")
+        content_parts.append(
+            "[dim]Blame (Journal):[/dim] [yellow]No unit timing data found or parsed from journal.[/yellow]"
+        )
 
     # --- Critical Chain ---
     if content_parts:
         content_parts.append("")
     if result.critical_chain_error:
-         content_parts.append(f"[dim]Critical Chain:[/dim] [red]Error: {result.critical_chain_error}[/red]")
+        content_parts.append(
+            f"[dim]Critical Chain:[/dim] [red]Error: {result.critical_chain_error}[/red]"
+        )
     elif result.critical_chain:
         chain_text = Text()
-        chain_text.append("Critical Chain (systemd-analyze critical-chain):\n", style="bold magenta")
+        chain_text.append(
+            "Critical Chain (systemd-analyze critical-chain):\n", style="bold magenta"
+        )
         for item in result.critical_chain:
             indent = " " * item.indent
             time_at = f" {item.time_at}" if item.time_at else ""
             time_delta_str = ""
             if item.time_delta:
                 try:
-                    delta_val_str = item.time_delta.lstrip('+')
-                    unit = 's'
+                    delta_val_str = item.time_delta.lstrip("+")
                     time_val = 0.0
-                    if delta_val_str.endswith('ms'):
-                        unit = 'ms'
-                        time_val = float(delta_val_str.rstrip('ms'))
+                    if delta_val_str.endswith("ms"):
+                        time_val = float(delta_val_str.rstrip("ms"))
                         time_val /= 1000.0
-                    elif delta_val_str.endswith('s'):
-                        unit = 's'
-                        time_val = float(delta_val_str.rstrip('s'))
+                    elif delta_val_str.endswith("s"):
+                        time_val = float(delta_val_str.rstrip("s"))
                     else:
                         time_val = float(delta_val_str)
                     if time_val > 1.0:
@@ -172,34 +249,62 @@ def format_boot_report(result: Optional[BootAnalysisResult], console: Console) -
             chain_text.append(f"{indent}{item.unit}{time_at}{time_delta_str}\n")
         content_parts.append(chain_text)
     else:
-         content_parts.append("[dim]Critical Chain:[/dim] [yellow]No critical chain data found or parsed.[/yellow]")
+        content_parts.append(
+            "[dim]Critical Chain:[/dim] [yellow]No critical chain data found or parsed.[/yellow]"
+        )
 
     # --- Final Print ---
     renderable_parts = [part for part in content_parts if part]
     if renderable_parts:
         # Use Group to render multiple items within the Panel
-        console.print(Panel(Group(*renderable_parts), title="Boot Analysis", border_style="blue", expand=False))
+        console.print(
+            Panel(
+                Group(*renderable_parts),
+                title="Boot Analysis",
+                border_style="blue",
+                expand=False,
+            )
+        )
     else:
         log.warning("format_boot_report generated empty content, panel not printed.")
 
 
-def format_health_report(result: Optional[HealthAnalysisResult], console: Console) -> None:
+def format_health_report(
+    result: Optional[HealthAnalysisResult], console: Console
+) -> None:
     """Formats and prints the Service Health Analysis results using Rich."""
     log.debug(f"format_health_report called with result object: {result is not None}")
     if not result:
-        console.print(Panel("[yellow]Health analysis data is not available.[/yellow]", title="Service Health Analysis", border_style="dim"))
+        console.print(
+            Panel(
+                "[yellow]Health analysis data is not available.[/yellow]",
+                title="Service Health Analysis",
+                border_style="dim",
+            )
+        )
         return
 
     output_elements: List[Any] = []
     if result.analysis_error:
         # If there's an analysis error, show only that in its own panel
-        console.print(Panel(f"[red]Error during analysis: {result.analysis_error}[/red]",
-                            title="Service Health Analysis Error", border_style="red", expand=False))
-        return # Don't print potentially partial/misleading tables if analysis failed
+        console.print(
+            Panel(
+                f"[red]Error during analysis: {result.analysis_error}[/red]",
+                title="Service Health Analysis Error",
+                border_style="red",
+                expand=False,
+            )
+        )
+        return  # Don't print potentially partial/misleading tables if analysis failed
 
     # --- Failed Units ---
     if result.failed_units:
-        table = Table(title=f"Failed Units ({len(result.failed_units)})", show_header=True, header_style="bold red", expand=True)
+        table = Table(
+            title=f"Failed Units ({len(result.failed_units)})",
+            show_header=True,
+            header_style="bold red",
+            expand=True,
+        )
         table.add_column("Unit", style="red", no_wrap=True)
         table.add_column("Load", style="dim", width=8)
         table.add_column("Active", style="dim", width=8)
@@ -209,98 +314,163 @@ def format_health_report(result: Optional[HealthAnalysisResult], console: Consol
         for unit in result.failed_units:
             details_str_parts = []
             if unit.details:
-                 res = unit.details.get('Result')
-                 ex_code = unit.details.get('ExecMainStatus')
-                 ex_stat = unit.details.get('ExecMainCode')
-                 pid = unit.details.get('ExecMainPID')
-                 if res and res != 'success': details_str_parts.append(f"Result: {res}")
-                 if ex_code is not None: details_str_parts.append(f"ExitCode: {ex_code}")
-                 if ex_stat is not None: details_str_parts.append(f"ExitStatus: {ex_stat}")
-                 if pid is not None and pid != 0: details_str_parts.append(f"PID: {pid}")
+                res = unit.details.get("Result")
+                ex_code = unit.details.get("ExecMainStatus")
+                ex_stat = unit.details.get("ExecMainCode")
+                pid = unit.details.get("ExecMainPID")
+                if res and res != "success":
+                    details_str_parts.append(f"Result: {res}")
+                if ex_code is not None:
+                    details_str_parts.append(f"ExitCode: {ex_code}")
+                if ex_stat is not None:
+                    details_str_parts.append(f"ExitStatus: {ex_stat}")
+                if pid is not None and pid != 0:
+                    details_str_parts.append(f"PID: {pid}")
             details_str = " ".join(details_str_parts)
-            if unit.error_message and not details_str: details_str = f"[dim]({unit.error_message})[/dim]"
-            table.add_row(unit.name, unit.load_state or "n/a", unit.active_state or "n/a", unit.sub_state or "n/a", details_str.strip() or "[dim]n/a[/dim]", _format_log_snippet(unit.recent_logs))
+            if unit.error_message and not details_str:
+                details_str = f"[dim]({unit.error_message})[/dim]"
+            table.add_row(
+                unit.name,
+                unit.load_state or "n/a",
+                unit.active_state or "n/a",
+                unit.sub_state or "n/a",
+                details_str.strip() or "[dim]n/a[/dim]",
+                _format_log_snippet(unit.recent_logs),
+            )
         output_elements.append(table)
 
     # --- Flapping Units ---
     if result.flapping_units:
-        table = Table(title=f"Potentially Flapping Units ({len(result.flapping_units)})", show_header=True, header_style="bold yellow", expand=True)
+        table = Table(
+            title=f"Potentially Flapping Units ({len(result.flapping_units)})",
+            show_header=True,
+            header_style="bold yellow",
+            expand=True,
+        )
         table.add_column("Unit", style="yellow", no_wrap=True)
         table.add_column("Restarts", style="magenta", width=8)
         table.add_column("State (Load/Active/Sub)", width=25)
         table.add_column("Recent Logs")
         for unit in result.flapping_units:
-            restarts = unit.details.get('NRestarts', '?')
-            state_str = f"{unit.load_state or '?'}/{unit.active_state or '?'}/{unit.sub_state or '?'}"
-            table.add_row(unit.name, str(restarts), state_str, _format_log_snippet(unit.recent_logs))
+            restarts = unit.details.get("NRestarts", "?")
+            state_str = (
+                f"{unit.load_state or '?'}/{unit.active_state or '?'}/{unit.sub_state or '?'}"
+            )
+            table.add_row(
+                unit.name, str(restarts), state_str, _format_log_snippet(unit.recent_logs)
+            )
         output_elements.append(table)
 
     # --- Problematic Sockets ---
     if result.problematic_sockets:
-        table = Table(title=f"Problematic Sockets ({len(result.problematic_sockets)})", show_header=True, header_style="bold orange1", expand=True)
+        table = Table(
+            title=f"Problematic Sockets ({len(result.problematic_sockets)})",
+            show_header=True,
+            header_style="bold orange1",
+            expand=True,
+        )
         table.add_column("Socket Unit", style="orange1", no_wrap=True)
         table.add_column("State (Load/Active/Sub)", width=25)
         table.add_column("Issue", style="red")
         table.add_column("Recent Logs")
         for unit in result.problematic_sockets:
-            state_str = f"{unit.load_state or '?'}/{unit.active_state or '?'}/{unit.sub_state or '?'}"
+            state_str = (
+                f"{unit.load_state or '?'}/{unit.active_state or '?'}/{unit.sub_state or '?'}"
+            )
             issue = unit.error_message or "Unknown issue"
-            table.add_row(unit.name, state_str, issue, _format_log_snippet(unit.recent_logs))
+            table.add_row(
+                unit.name, state_str, issue, _format_log_snippet(unit.recent_logs)
+            )
         output_elements.append(table)
 
     # --- Problematic Timers ---
     if result.problematic_timers:
-        table = Table(title=f"Problematic Timers ({len(result.problematic_timers)})", show_header=True, header_style="bold cyan", expand=True)
+        table = Table(
+            title=f"Problematic Timers ({len(result.problematic_timers)})",
+            show_header=True,
+            header_style="bold cyan",
+            expand=True,
+        )
         table.add_column("Timer Unit", style="cyan", no_wrap=True)
         table.add_column("State (Load/Active/Sub)", width=25)
         table.add_column("Issue", style="red")
         table.add_column("Last Triggered", width=20)
         table.add_column("Recent Logs")
         for unit in result.problematic_timers:
-            state_str = f"{unit.load_state or '?'}/{unit.active_state or '?'}/{unit.sub_state or '?'}"
+            state_str = (
+                f"{unit.load_state or '?'}/{unit.active_state or '?'}/{unit.sub_state or '?'}"
+            )
             issue = unit.error_message or "Unknown issue"
             last_trigger_str = "[dim]n/a[/dim]"
-            ts_usec = unit.details.get('LastTriggerUSec')
+            ts_usec = unit.details.get("LastTriggerUSec")
             if ts_usec:
                 try:
                     ts_usec_int = int(ts_usec)
                     if ts_usec_int == 0:
                         last_trigger_str = "[dim]Never[/dim]"
                     else:
-                        dt_object = datetime.datetime.fromtimestamp(ts_usec_int / 1_000_000, tz=datetime.timezone.utc)
-                        last_trigger_str = dt_object.strftime('%Y-%m-%d %H:%M:%S %Z')
+                        dt_object = datetime.datetime.fromtimestamp(
+                            ts_usec_int / 1_000_000, tz=datetime.timezone.utc
+                        )
+                        last_trigger_str = dt_object.strftime("%Y-%m-%d %H:%M:%S %Z")
                 except (ValueError, TypeError, OverflowError):
-                    last_trigger_str = str(ts_usec) # Fallback
-            table.add_row(unit.name, state_str, issue, last_trigger_str, _format_log_snippet(unit.recent_logs))
+                    last_trigger_str = str(ts_usec)  # Fallback
+            table.add_row(
+                unit.name,
+                state_str,
+                issue,
+                last_trigger_str,
+                _format_log_snippet(unit.recent_logs),
+            )
         output_elements.append(table)
 
     # --- Summary Message ---
     summary_message = None
-    if not result.failed_units and not result.flapping_units \
-       and not result.problematic_sockets and not result.problematic_timers:
-        summary_message = Panel(f"[green]No failed, flapping, or problematic socket/timer units detected among {result.all_units_count} units analyzed.[/green]",
-                                     title="Service Health Analysis Summary", border_style="green", expand=False)
-    elif not output_elements: # If tables were empty but no error reported
-         summary_message = Panel(f"[dim]No specific health issues identified among {result.all_units_count} units analyzed.[/dim]",
-                                     title="Service Health Analysis Summary", border_style="dim", expand=False)
+    if (
+        not result.failed_units
+        and not result.flapping_units
+        and not result.problematic_sockets
+        and not result.problematic_timers
+    ):
+        summary_message = Panel(
+            f"[green]No failed, flapping, or problematic socket/timer units detected among {result.all_units_count} units analyzed.[/green]",
+            title="Service Health Analysis Summary",
+            border_style="green",
+            expand=False,
+        )
+    elif not output_elements:  # If tables were empty but no error reported
+        summary_message = Panel(
+            f"[dim]No specific health issues identified among {result.all_units_count} units analyzed.[/dim]",
+            title="Service Health Analysis Summary",
+            border_style="dim",
+            expand=False,
+        )
 
     # --- Final Print ---
     if output_elements:
         console.print(Padding(f"Analyzed {result.all_units_count} units.", (0, 0, 1, 0)))
         for element in output_elements:
-            console.print(element) # Print tables individually
+            console.print(element)  # Print tables individually
     elif summary_message:
-         console.print(summary_message) # Print only the summary if no tables
+        console.print(summary_message)  # Print only the summary if no tables
     else:
         log.warning("format_health_report generated no output elements.")
         # Should be covered by analysis_error check
 
 
-def format_resource_report(result: Optional[ResourceAnalysisResult], console: Console) -> None:
+def format_resource_report(
+    result: Optional[ResourceAnalysisResult], console: Console
+) -> None:
     """Formats and prints the Resource Analysis results using Rich."""
     log.debug(f"format_resource_report called with result object: {result is not None}")
     if not result:
-        console.print(Panel("[yellow]Resource analysis data is not available.[/yellow]", title="Resource Analysis", border_style="dim"))
+        console.print(
+            Panel(
+                "[yellow]Resource analysis data is not available.[/yellow]",
+                title="Resource Analysis",
+                border_style="dim",
+            )
+        )
         return
 
     output_elements: List[Any] = []
@@ -315,160 +485,382 @@ def format_resource_report(result: Optional[ResourceAnalysisResult], console: Co
     if result.system_usage:
         sys_usage = result.system_usage
         if sys_usage.error:
-             output_elements.append(f"[red]System Usage Error: {sys_usage.error}[/red]")
+            output_elements.append(f"[red]System Usage Error: {sys_usage.error}[/red]")
         else:
             sys_lines = []
             if sys_usage.cpu_percent is not None:
-                sys_lines.append(f"  CPU Usage: [bold cyan]{sys_usage.cpu_percent:.1f}%[/bold cyan]")
-            if sys_usage.mem_percent is not None and sys_usage.mem_available_bytes is not None and sys_usage.mem_total_bytes is not None:
-                sys_lines.append(f"  Memory:    [bold magenta]{sys_usage.mem_percent:.1f}%[/bold magenta] used ([cyan]{_format_bytes(sys_usage.mem_available_bytes)}[/cyan] available / [dim]{_format_bytes(sys_usage.mem_total_bytes)} total[/dim])")
-            if sys_usage.swap_percent is not None and sys_usage.swap_used_bytes is not None and sys_usage.swap_total_bytes is not None:
-                 if sys_usage.swap_total_bytes > 0:
-                     sys_lines.append(f"  Swap:      [bold yellow]{sys_usage.swap_percent:.1f}%[/bold yellow] used ([cyan]{_format_bytes(sys_usage.swap_total_bytes - sys_usage.swap_used_bytes)}[/cyan] free / [dim]{_format_bytes(sys_usage.swap_total_bytes)} total[/dim])")
+                sys_lines.append(
+                    f"  CPU Usage: [bold cyan]{sys_usage.cpu_percent:.1f}%[/bold cyan]"
+                )
+            if (
+                sys_usage.mem_percent is not None
+                and sys_usage.mem_available_bytes is not None
+                and sys_usage.mem_total_bytes is not None
+            ):
+                sys_lines.append(
+                    f"  Memory:    [bold magenta]{sys_usage.mem_percent:.1f}%[/bold magenta] used ([cyan]{_format_bytes(sys_usage.mem_available_bytes)}[/cyan] available / [dim]{_format_bytes(sys_usage.mem_total_bytes)} total[/dim])"
+                )
+            if (
+                sys_usage.swap_percent is not None
+                and sys_usage.swap_used_bytes is not None
+                and sys_usage.swap_total_bytes is not None
+            ):
+                if sys_usage.swap_total_bytes > 0:
+                    sys_lines.append(
+                        f"  Swap:      [bold yellow]{sys_usage.swap_percent:.1f}%[/bold yellow] used ([cyan]{_format_bytes(sys_usage.swap_total_bytes - sys_usage.swap_used_bytes)}[/cyan] free / [dim]{_format_bytes(sys_usage.swap_total_bytes)} total[/dim])"
+                    )
             if sys_lines:
-                 output_elements.append("[bold green]System-Wide Usage:[/bold green]")
-                 output_elements.extend(sys_lines)
+                output_elements.append("[bold green]System-Wide Usage:[/bold green]")
+                output_elements.extend(sys_lines)
             else:
-                 output_elements.append("[yellow]System-wide usage data unavailable.[/yellow]")
+                output_elements.append(
+                    "[yellow]System-wide usage data unavailable.[/yellow]"
+                )
     else:
         output_elements.append("[yellow]System-wide usage data unavailable.[/yellow]")
 
-    has_unit_data = result.top_cpu_units or result.top_memory_units or result.top_io_units
+    has_unit_data = (
+        result.top_cpu_units or result.top_memory_units or result.top_io_units
+    )
     has_child_data = result.child_process_groups
     if output_elements and (has_unit_data or has_child_data):
-         output_elements.append("") # Separator
+        output_elements.append("")  # Separator
 
     # --- Top Consumers Tables ---
     if result.top_cpu_units:
-        table = Table(title=f"Top {len(result.top_cpu_units)} CPU Consumers (systemd Units - cgroup)", show_header=True, header_style="bold cyan", expand=True)
-        table.add_column("Unit", style="cyan", no_wrap=True); table.add_column("CPU Time", style="magenta", width=12, justify="right"); table.add_column("Current Mem", style="blue", width=12, justify="right"); table.add_column("Tasks", style="green", width=7, justify="right"); table.add_column("Error", style="red")
-        for unit in result.top_cpu_units: table.add_row(unit.name, _format_nanoseconds(unit.cpu_usage_nsec), _format_bytes(unit.memory_current_bytes), str(unit.tasks_current) if unit.tasks_current is not None else "[dim]n/a[/dim]", unit.error or "")
+        table = Table(
+            title=f"Top {len(result.top_cpu_units)} CPU Consumers (systemd Units - cgroup)",
+            show_header=True,
+            header_style="bold cyan",
+            expand=True,
+        )
+        table.add_column("Unit", style="cyan", no_wrap=True)
+        table.add_column("CPU Time", style="magenta", width=12, justify="right")
+        table.add_column("Current Mem", style="blue", width=12, justify="right")
+        table.add_column("Tasks", style="green", width=7, justify="right")
+        table.add_column("Error", style="red")
+        for unit in result.top_cpu_units:
+            table.add_row(
+                unit.name,
+                _format_nanoseconds(unit.cpu_usage_nsec),
+                _format_bytes(unit.memory_current_bytes),
+                str(unit.tasks_current)
+                if unit.tasks_current is not None
+                else "[dim]n/a[/dim]",
+                unit.error or "",
+            )
         output_elements.append(table)
     if result.top_memory_units:
-        table = Table(title=f"Top {len(result.top_memory_units)} Memory Consumers (systemd Units - cgroup)", show_header=True, header_style="bold magenta", expand=True)
-        table.add_column("Unit", style="magenta", no_wrap=True); table.add_column("Current Mem", style="blue", width=12, justify="right"); table.add_column("Peak Mem", style="cyan", width=12, justify="right"); table.add_column("CPU Time", style="magenta", width=12, justify="right"); table.add_column("Tasks", style="green", width=7, justify="right"); table.add_column("Error", style="red")
-        for unit in result.top_memory_units: table.add_row(unit.name, _format_bytes(unit.memory_current_bytes), _format_bytes(unit.memory_peak_bytes), _format_nanoseconds(unit.cpu_usage_nsec), str(unit.tasks_current) if unit.tasks_current is not None else "[dim]n/a[/dim]", unit.error or "")
+        table = Table(
+            title=f"Top {len(result.top_memory_units)} Memory Consumers (systemd Units - cgroup)",
+            show_header=True,
+            header_style="bold magenta",
+            expand=True,
+        )
+        table.add_column("Unit", style="magenta", no_wrap=True)
+        table.add_column("Current Mem", style="blue", width=12, justify="right")
+        table.add_column("Peak Mem", style="cyan", width=12, justify="right")
+        table.add_column("CPU Time", style="magenta", width=12, justify="right")
+        table.add_column("Tasks", style="green", width=7, justify="right")
+        table.add_column("Error", style="red")
+        for unit in result.top_memory_units:
+            table.add_row(
+                unit.name,
+                _format_bytes(unit.memory_current_bytes),
+                _format_bytes(unit.memory_peak_bytes),
+                _format_nanoseconds(unit.cpu_usage_nsec),
+                str(unit.tasks_current)
+                if unit.tasks_current is not None
+                else "[dim]n/a[/dim]",
+                unit.error or "",
+            )
         output_elements.append(table)
     if result.top_io_units:
-        table = Table(title=f"Top {len(result.top_io_units)} I/O Consumers (systemd Units - cgroup - Cumulative)", show_header=True, header_style="bold yellow", expand=True)
-        table.add_column("Unit", style="yellow", no_wrap=True); table.add_column("Read Bytes", style="blue", width=12, justify="right"); table.add_column("Write Bytes", style="cyan", width=12, justify="right"); table.add_column("Total I/O", style="green", width=12, justify="right"); table.add_column("Error", style="red")
-        for unit in result.top_io_units: total_io = (unit.io_read_bytes or 0) + (unit.io_write_bytes or 0); table.add_row(unit.name, _format_bytes(unit.io_read_bytes), _format_bytes(unit.io_write_bytes), _format_bytes(total_io) if total_io > 0 else "[dim]n/a[/dim]", unit.error or "")
+        table = Table(
+            title=f"Top {len(result.top_io_units)} I/O Consumers (systemd Units - cgroup - Cumulative)",
+            show_header=True,
+            header_style="bold yellow",
+            expand=True,
+        )
+        table.add_column("Unit", style="yellow", no_wrap=True)
+        table.add_column("Read Bytes", style="blue", width=12, justify="right")
+        table.add_column("Write Bytes", style="cyan", width=12, justify="right")
+        table.add_column("Total I/O", style="green", width=12, justify="right")
+        table.add_column("Error", style="red")
+        for unit in result.top_io_units:
+            total_io = (unit.io_read_bytes or 0) + (unit.io_write_bytes or 0)
+            table.add_row(
+                unit.name,
+                _format_bytes(unit.io_read_bytes),
+                _format_bytes(unit.io_write_bytes),
+                _format_bytes(total_io) if total_io > 0 else "[dim]n/a[/dim]",
+                unit.error or "",
+            )
         output_elements.append(table)
 
     # --- Child Process Groups ---
     if result.child_process_groups:
-        table = Table(title=f"Child Process Group Usage ({len(result.child_process_groups)} groups - psutil)", show_header=True, header_style="bold blue", expand=True)
-        table.add_column("Command Name", style="cyan", no_wrap=True); table.add_column("Parent Unit", style="blue", no_wrap=True); table.add_column("Process Count", style="green", width=8, justify="right"); table.add_column("Aggr. CPU %", style="magenta", width=12, justify="right"); table.add_column("Aggr. Memory", style="yellow", width=14, justify="right"); table.add_column("Example PIDs", style="dim")
+        table = Table(
+            title=f"Child Process Group Usage ({len(result.child_process_groups)} groups - psutil)",
+            show_header=True,
+            header_style="bold blue",
+            expand=True,
+        )
+        table.add_column("Command Name", style="cyan", no_wrap=True)
+        table.add_column("Parent Unit", style="blue", no_wrap=True)
+        table.add_column("Process Count", style="green", width=8, justify="right")
+        # MODIFIED: Changed header from CPU % to CPU Time.
+        table.add_column("Aggr. CPU Time", style="magenta", width=12, justify="right")
+        table.add_column("Aggr. Memory", style="yellow", width=14, justify="right")
+        table.add_column("Example PIDs", style="dim")
         for group in result.child_process_groups:
-            cpu_str = "[dim]n/a[/dim]"
-            if group.aggregated_cpu_percent is not None:
-                cpu_str = f"{group.aggregated_cpu_percent:.1f}%"
+            # MODIFIED: Format cumulative seconds instead of percentage.
+            cpu_str = _format_seconds(group.aggregated_cpu_seconds)
             mem_str = _format_bytes(group.aggregated_memory_bytes)
             pids_str = ", ".join(map(str, group.pids))
             if len(group.pids) < group.process_count:
                 pids_str += "..."
-            table.add_row(group.command_name, group.parent_unit, str(group.process_count), cpu_str, mem_str, pids_str)
+            table.add_row(
+                group.command_name,
+                group.parent_unit,
+                str(group.process_count),
+                cpu_str,
+                mem_str,
+                pids_str,
+            )
         output_elements.append(table)
 
     # --- Final Print ---
     if output_elements:
         # Use Group for correct rendering within Panel
-        final_panel = Panel(Group(*output_elements), title=title, border_style=border_style, expand=False)
+        final_panel = Panel(
+            Group(*output_elements), title=title, border_style=border_style, expand=False
+        )
         console.print(final_panel)
     elif not result.analysis_error:
-        console.print(Panel("[dim]No resource usage data to display.[/dim]", title=title, border_style="dim"))
+        console.print(
+            Panel("[dim]No resource usage data to display.[/dim]", title=title, border_style="dim")
+        )
 
 
 def format_log_report(result: Optional[LogAnalysisResult], console: Console) -> None:
     """Formats and prints the Log Analysis results using Rich."""
     log.debug(f"format_log_report called with result object: {result is not None}")
     if not result:
-        console.print(Panel("[yellow]Log analysis data is not available.[/yellow]", title="Log Analysis", border_style="dim"))
+        console.print(
+            Panel(
+                "[yellow]Log analysis data is not available.[/yellow]",
+                title="Log Analysis",
+                border_style="dim",
+            )
+        )
         return
 
     output_elements: List[Any] = []
-    title = "Log Analysis"; border_style = "magenta"
+    title = "Log Analysis"
+    border_style = "magenta"
     if result.analysis_error:
         output_elements.append(f"[red]Analysis Error: {result.analysis_error}[/red]")
         border_style = "red"
-    source_info = f"Source: {result.log_source or 'unknown'}"; count_info = f"Entries Analyzed: {result.total_entries_analyzed}"
+    source_info = f"Source: {result.log_source or 'unknown'}"
+    count_info = f"Entries Analyzed: {result.total_entries_analyzed}"
     output_elements.append(f"[dim]{source_info} | {count_info}[/dim]")
     oom_events = [p for p in result.detected_patterns if p.pattern_type == "OOM"]
-    error_patterns = sorted([p for p in result.detected_patterns if p.pattern_type == "Error"], key=lambda p: p.count, reverse=True)
-    warning_patterns = sorted([p for p in result.detected_patterns if p.pattern_type == "Warning"], key=lambda p: p.count, reverse=True)
-    if not oom_events and not error_patterns and not warning_patterns and not result.analysis_error:
-         output_elements.append("\n[green]No significant OOM, error, or warning patterns detected.[/green]")
+    error_patterns = sorted(
+        [p for p in result.detected_patterns if p.pattern_type == "Error"],
+        key=lambda p: p.count,
+        reverse=True,
+    )
+    warning_patterns = sorted(
+        [p for p in result.detected_patterns if p.pattern_type == "Warning"],
+        key=lambda p: p.count,
+        reverse=True,
+    )
+    if (
+        not oom_events
+        and not error_patterns
+        and not warning_patterns
+        and not result.analysis_error
+    ):
+        output_elements.append(
+            "\n[green]No significant OOM, error, or warning patterns detected.[/green]"
+        )
     else:
-         output_elements.append("")
+        output_elements.append("")
     if oom_events:
-        oom_info = oom_events[0]; table = Table(title=f"[bold red]OOM Killer Events Detected ({oom_info.count})[/bold red]", show_header=True, header_style="bold red", expand=True); table.add_column("Count", style="red", width=8, justify="right"); table.add_column("Example Messages"); table.add_row(str(oom_info.count), _format_log_snippet(oom_info.example_messages, max_lines=MAX_EXAMPLE_MESSAGES)); output_elements.append(table)
+        oom_info = oom_events[0]
+        table = Table(
+            title=f"[bold red]OOM Killer Events Detected ({oom_info.count})[/bold red]",
+            show_header=True,
+            header_style="bold red",
+            expand=True,
+        )
+        table.add_column("Count", style="red", width=8, justify="right")
+        table.add_column("Example Messages")
+        table.add_row(
+            str(oom_info.count),
+            _format_log_snippet(oom_info.example_messages, max_lines=MAX_EXAMPLE_MESSAGES),
+        )
+        output_elements.append(table)
     if error_patterns:
-        table = Table(title=f"Top Error Patterns ({len(error_patterns)})", show_header=True, header_style="bold yellow", expand=True); table.add_column("Pattern Key", style="yellow", no_wrap=True, width=20); table.add_column("Count", style="magenta", width=8, justify="right"); table.add_column("Level", style="dim", width=8); table.add_column("Example Messages")
-        for pattern in error_patterns: table.add_row(pattern.pattern_key, str(pattern.count), pattern.level or "[dim]n/a[/dim]", _format_log_snippet(pattern.example_messages, max_lines=MAX_EXAMPLE_MESSAGES))
+        table = Table(
+            title=f"Top Error Patterns ({len(error_patterns)})",
+            show_header=True,
+            header_style="bold yellow",
+            expand=True,
+        )
+        table.add_column("Pattern Key", style="yellow", no_wrap=True, width=20)
+        table.add_column("Count", style="magenta", width=8, justify="right")
+        table.add_column("Level", style="dim", width=8)
+        table.add_column("Example Messages")
+        for pattern in error_patterns:
+            table.add_row(
+                pattern.pattern_key,
+                str(pattern.count),
+                pattern.level or "[dim]n/a[/dim]",
+                _format_log_snippet(
+                    pattern.example_messages, max_lines=MAX_EXAMPLE_MESSAGES
+                ),
+            )
         output_elements.append(table)
     if warning_patterns:
-        table = Table(title=f"Top Warning Patterns ({len(warning_patterns)})", show_header=True, header_style="bold cyan", expand=True); table.add_column("Pattern Key", style="cyan", no_wrap=True, width=20); table.add_column("Count", style="magenta", width=8, justify="right"); table.add_column("Level", style="dim", width=8); table.add_column("Example Messages")
-        for pattern in warning_patterns: table.add_row(pattern.pattern_key, str(pattern.count), pattern.level or "[dim]n/a[/dim]", _format_log_snippet(pattern.example_messages, max_lines=MAX_EXAMPLE_MESSAGES))
+        table = Table(
+            title=f"Top Warning Patterns ({len(warning_patterns)})",
+            show_header=True,
+            header_style="bold cyan",
+            expand=True,
+        )
+        table.add_column("Pattern Key", style="cyan", no_wrap=True, width=20)
+        table.add_column("Count", style="magenta", width=8, justify="right")
+        table.add_column("Level", style="dim", width=8)
+        table.add_column("Example Messages")
+        for pattern in warning_patterns:
+            table.add_row(
+                pattern.pattern_key,
+                str(pattern.count),
+                pattern.level or "[dim]n/a[/dim]",
+                _format_log_snippet(
+                    pattern.example_messages, max_lines=MAX_EXAMPLE_MESSAGES
+                ),
+            )
         output_elements.append(table)
     if output_elements:
         # Use Group for correct rendering within Panel
-        final_panel = Panel(Group(*output_elements), title=title, border_style=border_style, expand=False)
+        final_panel = Panel(
+            Group(*output_elements), title=title, border_style=border_style, expand=False
+        )
         console.print(final_panel)
     elif not result.analysis_error:
-        console.print(Panel("[dim]No log analysis data to display.[/dim]", title=title, border_style="dim"))
+        console.print(
+            Panel(
+                "[dim]No log analysis data to display.[/dim]",
+                title=title,
+                border_style="dim",
+            )
+        )
 
 
-def format_dependency_report(result: Optional[DependencyAnalysisResult], console: Console) -> None:
+def format_dependency_report(
+    result: Optional[DependencyAnalysisResult], console: Console
+) -> None:
     """Formats and prints the Dependency Analysis results using Rich."""
     log.debug(f"format_dependency_report called with result object: {result is not None}")
     title = "Dependency Analysis for Failed Units"
     border_style = "cyan"
 
     if not result:
-        console.print(Panel("[yellow]Dependency analysis data is not available.[/yellow]", title=title, border_style="dim"))
+        console.print(
+            Panel(
+                "[yellow]Dependency analysis data is not available.[/yellow]",
+                title=title,
+                border_style="dim",
+            )
+        )
         return
 
     if result.analysis_error:
         # If overall analysis failed, just show that
-        console.print(Panel(f"[red]Overall Analysis Error: {result.analysis_error}[/red]", title=title, border_style="red", expand=False))
+        console.print(
+            Panel(
+                f"[red]Overall Analysis Error: {result.analysis_error}[/red]",
+                title=title,
+                border_style="red",
+                expand=False,
+            )
+        )
         return
 
     if not result.failed_unit_dependencies:
-        console.print(Panel("[dim]No failed units found or analyzed for dependencies.[/dim]", title=title, border_style="dim", expand=False))
+        console.print(
+            Panel(
+                "[dim]No failed units found or analyzed for dependencies.[/dim]",
+                title=title,
+                border_style="dim",
+                expand=False,
+            )
+        )
         return
 
     # Print a panel for each failed unit analyzed
-    console.print(Panel(f"[bold]Analysis for {len(result.failed_unit_dependencies)} Failed Unit(s)[/bold]", title=title, border_style=border_style, expand=False))
+    console.print(
+        Panel(
+            f"[bold]Analysis for {len(result.failed_unit_dependencies)} Failed Unit(s)[/bold]",
+            title=title,
+            border_style=border_style,
+            expand=False,
+        )
+    )
     for i, unit_info in enumerate(result.failed_unit_dependencies):
         unit_content: List[Any] = []
         if unit_info.error:
-            unit_content.append(f"  [red]Error analyzing dependencies: {unit_info.error}[/red]")
+            unit_content.append(
+                f"  [red]Error analyzing dependencies: {unit_info.error}[/red]"
+            )
 
         if not unit_info.dependencies and not unit_info.error:
             unit_content.append("  [dim]No dependencies listed or analyzed.[/dim]")
         elif unit_info.dependencies:
-            table = Table(show_header=True, header_style="bold blue", expand=False, box=None, padding=(0,1))
+            table = Table(
+                show_header=True,
+                header_style="bold blue",
+                expand=False,
+                box=None,
+                padding=(0, 1),
+            )
             table.add_column("Dependency", style="cyan", no_wrap=True, min_width=20)
             table.add_column("Type", style="magenta", width=10)
             table.add_column("State (L / A / S)", style="white", width=25)
-            table.add_column("Problematic?", style="yellow", width=12, justify="center")
+            table.add_column(
+                "Problematic?", style="yellow", width=12, justify="center"
+            )
             for dep in unit_info.dependencies:
                 state_str = f"{dep.current_load_state or '?'} / {dep.current_active_state or '?'} / {dep.current_sub_state or '?'}"
-                if dep.current_active_state == 'failed':
+                if dep.current_active_state == "failed":
                     state_str = f"[red]{state_str}[/red]"
-                elif dep.current_active_state == 'inactive':
+                elif dep.current_active_state == "inactive":
                     state_str = f"[dim]{state_str}[/dim]"
                 problem_str = "[bold red]YES[/]" if dep.is_problematic else "[dim]No[/]"
                 table.add_row(dep.name, dep.type, state_str, problem_str)
             unit_content.append(table)
 
         # Print a separate panel for each unit's dependencies
-        console.print(Panel(Padding(Group(*unit_content), (0,1)), title=f"Failed Unit: [white]{unit_info.unit_name}[/white]", border_style="yellow", expand=False))
+        console.print(
+            Panel(
+                Padding(Group(*unit_content), (0, 1)),
+                title=f"Failed Unit: [white]{unit_info.unit_name}[/white]",
+                border_style="yellow",
+                expand=False,
+            )
+        )
 
 
-def format_full_dependency_report(result: Optional[FullDependencyAnalysisResult], console: Console) -> None:
+def format_full_dependency_report(
+    result: Optional[FullDependencyAnalysisResult], console: Console
+) -> None:
     """Formats and prints the Full Dependency Graph Analysis results."""
-    log.debug(f"format_full_dependency_report called with result object: {result is not None}")
+    log.debug(
+        f"format_full_dependency_report called with result object: {result is not None}"
+    )
     title = "Full Dependency Graph Analysis"
     border_style = "blue"
 
@@ -481,27 +873,38 @@ def format_full_dependency_report(result: Optional[FullDependencyAnalysisResult]
         output_elements.append(f"[red]Analysis Error: {result.analysis_error}[/red]")
         border_style = "red"
     if result.dependency_fetch_error:
-        output_elements.append(f"  [dim]Fetch Error:[/dim] [red]{result.dependency_fetch_error}[/red]")
+        output_elements.append(
+            f"  [dim]Fetch Error:[/dim] [red]{result.dependency_fetch_error}[/red]"
+        )
     if result.graph_build_error:
-        output_elements.append(f"  [dim]Graph Build Error:[/dim] [red]{result.graph_build_error}[/red]")
+        output_elements.append(
+            f"  [dim]Graph Build Error:[/dim] [red]{result.graph_build_error}[/red]"
+        )
     if not result.detected_cycles:
         if not result.analysis_error:
             output_elements.append("[green]No dependency cycles detected.[/green]")
     else:
         if result.analysis_error:
             output_elements.append("")
-        output_elements.append(f"[bold yellow]Detected {len(result.detected_cycles)} Dependency Cycles:[/bold yellow]")
+        output_elements.append(
+            f"[bold yellow]Detected {len(result.detected_cycles)} Dependency Cycles:[/bold yellow]"
+        )
         cycle_text = Text()
         for i, cycle in enumerate(result.detected_cycles):
             if i >= MAX_CYCLES_TO_SHOW:
-                cycle_text.append(f"\n... ({len(result.detected_cycles) - MAX_CYCLES_TO_SHOW} more cycles omitted) ...")
+                cycle_text.append(
+                    f"\n... ({len(result.detected_cycles) - MAX_CYCLES_TO_SHOW} more cycles omitted) ..."
+                )
                 break
             cycle_str = " -> ".join(cycle) + f" -> {cycle[0]}"
             cycle_text.append(f"  {i+1}. {cycle_str}\n")
         output_elements.append(cycle_text)
     final_content = "\n".join(str(el) for el in output_elements).strip()
     if final_content:
-        console.print(Panel(final_content, title=title, border_style=border_style, expand=False))
+        console.print(
+            Panel(final_content, title=title, border_style=border_style, expand=False)
+        )
+
 
 def format_ml_report(result: Optional[MLAnalysisResult], console: Console) -> None:
     """Formats and prints the ML Analysis results using Rich."""
@@ -523,38 +926,50 @@ def format_ml_report(result: Optional[MLAnalysisResult], console: Console) -> No
         skipped_examples = ", ".join(result.skipped_zero_variance_units[:5])
         if skipped_count > 5:
             skipped_examples += "..."
-        output_elements.append(f"[dim]Skipped {skipped_count} units during training (zero variance): {skipped_examples}[/dim]")
+        output_elements.append(
+            f"[dim]Skipped {skipped_count} units during training (zero variance): {skipped_examples}[/dim]"
+        )
     if not result.anomalies_detected:
         if not result.error:
-            output_elements.append("\n[green]No anomalies detected based on historical data.[/green]")
+            output_elements.append(
+                "\n[green]No anomalies detected based on historical data.[/green]"
+            )
     else:
         if result.error or result.skipped_zero_variance_units:
-             output_elements.append("")
+            output_elements.append("")
         sorted_anomalies = sorted(result.anomalies_detected, key=lambda a: a.score)
-        table = Table(title=f"[bold yellow]Detected Anomalies ({len(result.anomalies_detected)})[/bold yellow]", show_header=True, header_style="bold yellow", expand=True)
+        table = Table(
+            title=f"[bold yellow]Detected Anomalies ({len(result.anomalies_detected)})[/bold yellow]",
+            show_header=True,
+            header_style="bold yellow",
+            expand=True,
+        )
         table.add_column("Unit", style="yellow", no_wrap=True)
         table.add_column("Anomaly Score", style="magenta", width=15, justify="right")
         for anomaly in sorted_anomalies:
             score_str = f"{anomaly.score:.4f}"
             table.add_row(anomaly.unit_name, score_str)
-        output_elements.append(table) # Add table object
+        output_elements.append(table)  # Add table object
     if output_elements:
         # Use Group for correct rendering within Panel
-        final_panel = Panel(Group(*output_elements), title=title, border_style=border_style, expand=False)
+        final_panel = Panel(
+            Group(*output_elements), title=title, border_style=border_style, expand=False
+        )
         console.print(final_panel)
+
 
 def format_llm_report(result: Optional[LLMAnalysisResult], console: Console) -> None:
     """Formats and prints the LLM Analysis results using Rich."""
     log.debug(f"format_llm_report called with result object: {result is not None}")
     title = "LLM Synthesis & Recommendations"
-    border_style = "green" # Default to green
+    border_style = "green"  # Default to green
     if not result:
         log.debug("Skipping LLM report formatting (no result data).")
         return
     output_elements = []
     if result.error:
         output_elements.append(f"[red]LLM Analysis Error: {result.error}[/red]")
-        border_style = "red" # Change border if error
+        border_style = "red"  # Change border if error
     meta_parts = []
     if result.provider_used:
         meta_parts.append(f"Provider: {result.provider_used}")
@@ -565,25 +980,26 @@ def format_llm_report(result: Optional[LLMAnalysisResult], console: Console) -> 
     if result.completion_token_count is not None:
         meta_parts.append(f"Completion Tokens: {result.completion_token_count}")
     if meta_parts:
-         output_elements.append(f"[dim]{' | '.join(meta_parts)}[/dim]")
+        output_elements.append(f"[dim]{' | '.join(meta_parts)}[/dim]")
     if result.synthesis:
         if output_elements:
-            output_elements.append("") # Add separator
+            output_elements.append("")  # Add separator
         try:
             md = Markdown(result.synthesis)
             output_elements.append(md)
         except Exception as e:
-            log.error(f"Error rendering LLM synthesis as Markdown: {e}. Falling back to plain text.")
+            log.error(
+                f"Error rendering LLM synthesis as Markdown: {e}. Falling back to plain text."
+            )
             output_elements.append(result.synthesis)
     elif not result.error:
         output_elements.append("\n[dim]LLM did not produce a synthesis.[/dim]")
     # Final Print
-    final_content = ""
     md_object = None
     str_elements = []
     for el in output_elements:
         if isinstance(el, Markdown):
-            md_object = el # Assume only one Markdown object for now
+            md_object = el  # Assume only one Markdown object for now
         else:
             str_elements.append(str(el))
     final_content_str = "\n".join(str_elements).strip()
@@ -593,95 +1009,177 @@ def format_llm_report(result: Optional[LLMAnalysisResult], console: Console) -> 
         panel_content: Any
         if content_group and md_object:
             # Combine Group and Markdown
-            panel_content = Group(content_group, Padding(md_object, (1, 0, 0, 0))) # Add padding above MD
+            panel_content = Group(content_group, Padding(md_object, (1, 0, 0, 0)))
         elif md_object:
             panel_content = md_object
-        else: # Only string content
+        else:  # Only string content
             panel_content = content_group
 
         if panel_content:
-            console.print(Panel(panel_content, title=title, border_style=border_style, expand=True))
+            console.print(
+                Panel(panel_content, title=title, border_style=border_style, expand=True)
+            )
+
 
 def format_ebpf_report(result: Optional[EBPFAnalysisResult], console: Console) -> None:
     """Formats and prints the eBPF Analysis results using Rich."""
     log.debug(f"format_ebpf_report called with result object: {result is not None}")
-    title = "eBPF Process Tracing"; border_style = "blue"
+    title = "eBPF Process Tracing"
+    border_style = "blue"
     if not result:
         log.debug("Skipping eBPF report formatting (no result data).")
         return
+
     output_elements: List[Any] = []
     if result.error:
         output_elements.append(f"[red]eBPF Analysis Error: {result.error}[/red]")
         border_style = "red"
+
     exec_count = len(result.exec_events)
     exit_count = len(result.exit_events)
     output_elements.append(f"[dim]Events Captured: Execs={exec_count}, Exits={exit_count}[/dim]")
+
     if not result.exec_events and not result.exit_events and not result.error:
-        output_elements.append("\n[dim]No eBPF process events captured during analysis window.[/dim]")
+        output_elements.append(
+            "\n[dim]No eBPF process events captured during analysis window.[/dim]"
+        )
     else:
         if result.error:
-            output_elements.append("") # Add separator
+            output_elements.append("")  # Add separator
+
         if result.exec_events:
-            exec_table = Table(title=f"Recent Process Executions (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})", show_header=True, header_style="bold blue", expand=True)
-            exec_table.add_column("Timestamp", style="dim", width=26); exec_table.add_column("PID", style="green", width=8); exec_table.add_column("PPID", style="blue", width=8); exec_table.add_column("Comm", style="cyan", width=16); exec_table.add_column("Filename", style="magenta")
+            exec_table = Table(
+                title=f"Recent Process Executions (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})",
+                show_header=True,
+                header_style="bold blue",
+                expand=True,
+            )
+            exec_table.add_column("Timestamp", style="dim", width=26)
+            exec_table.add_column("PID", style="green", width=8)
+            exec_table.add_column("PPID", style="blue", width=8)
+            exec_table.add_column("Comm", style="cyan", width=16)
+            exec_table.add_column("Filename", style="magenta")
             for event in result.exec_events[-MAX_EBPF_EVENTS_TO_SHOW:]:
-                 ts = datetime.datetime.fromtimestamp(event.timestamp_ns / 1e9, tz=datetime.timezone.utc)
-                 ts_str = ts.isoformat(timespec='milliseconds')
-                 exec_table.add_row(ts_str, str(event.pid), str(event.ppid), event.comm, event.filename)
+                ts = datetime.datetime.fromtimestamp(
+                    event.timestamp_ns / 1e9, tz=datetime.timezone.utc
+                )
+                ts_str = ts.isoformat(timespec="milliseconds")
+                exec_table.add_row(
+                    ts_str, str(event.pid), str(event.ppid), event.comm, event.filename
+                )
             output_elements.append(exec_table)
+
         if result.exit_events:
-            exit_table = Table(title=f"Recent Process Exits (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})", show_header=True, header_style="bold blue", expand=True)
-            exit_table.add_column("Timestamp", style="dim", width=26); exit_table.add_column("PID", style="green", width=8); exit_table.add_column("PPID", style="blue", width=8); exit_table.add_column("Comm", style="cyan", width=16); exit_table.add_column("Exit Code", style="yellow", width=10)
+            exit_table = Table(
+                title=f"Recent Process Exits (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})",
+                show_header=True,
+                header_style="bold blue",
+                expand=True,
+            )
+            exit_table.add_column("Timestamp", style="dim", width=26)
+            exit_table.add_column("PID", style="green", width=8)
+            exit_table.add_column("PPID", style="blue", width=8)
+            exit_table.add_column("Comm", style="cyan", width=16)
+            exit_table.add_column("Exit Code", style="yellow", width=10)
             for event in result.exit_events[-MAX_EBPF_EVENTS_TO_SHOW:]:
-                 ts = datetime.datetime.fromtimestamp(event.timestamp_ns / 1e9, tz=datetime.timezone.utc)
-                 ts_str = ts.isoformat(timespec='milliseconds')
-                 exit_code_str = str(event.exit_code)
-                 if event.exit_code != 0:
-                      exit_code_str = f"[bold red]{exit_code_str}[/bold red]"
-                 exit_table.add_row(ts_str, str(event.pid), str(event.ppid), event.comm, exit_code_str)
+                ts = datetime.datetime.fromtimestamp(
+                    event.timestamp_ns / 1e9, tz=datetime.timezone.utc
+                )
+                ts_str = ts.isoformat(timespec="milliseconds")
+                exit_code_str = str(event.exit_code)
+                if event.exit_code != 0:
+                    exit_code_str = f"[bold red]{exit_code_str}[/bold red]"
+                exit_table.add_row(
+                    ts_str, str(event.pid), str(event.ppid), event.comm, exit_code_str
+                )
             output_elements.append(exit_table)
 
-    # FIX: Filter output_elements before passing to Group
-    valid_elements = [el for el in output_elements if el]
+    # Filter out any potential empty strings or None values before rendering
+    valid_elements = [elem for elem in output_elements if elem]
+
     if valid_elements:
         # Use Group for correct rendering within Panel
-        final_panel = Panel(Group(*valid_elements), title=title, border_style=border_style, expand=False)
+        final_panel = Panel(
+            Group(*valid_elements), title=title, border_style=border_style, expand=False
+        )
         console.print(final_panel)
-    else:
-        # Only print if there was no error and no elements (e.g., only summary was added, then filtered)
-        if not result.error:
-            log.debug("format_ebpf_report: No valid elements to render in panel.")
-            # Optionally print a minimal panel here if desired, e.g.,
-            # console.print(Panel("[dim]No eBPF data to display.[/dim]", title=title, border_style="dim"))
+    elif not result.error:
+        # This case is now unlikely but safe to keep.
+        # It handles if the summary text was the only thing, which is now inside the panel.
+        log.debug("format_ebpf_report: No valid elements to render in panel.")
+
 
 # --- Full Report Formatting ---
 def format_rich_report(report: Optional[SystemReport], console: Console) -> None:
     """Formats the full system report using Rich."""
     log.debug("format_rich_report called.")
     if report is None:
-        console.print(Panel("[bold red]Error: No analysis report generated.[/bold red]", title="Error", border_style="red"))
+        console.print(
+            Panel(
+                "[bold red]Error: No analysis report generated.[/bold red]",
+                title="Error",
+                border_style="red",
+            )
+        )
         return
-    console.print(Panel(f"[bold cyan]Sysdiag Analyzer Report[/bold cyan]\nHostname: {report.hostname or 'N/A'}\nTimestamp: {report.timestamp or 'N/A'}\nBoot ID: {report.boot_id or 'N/A'}", title="System Overview", border_style="green", expand=False))
+    console.print(
+        Panel(
+            f"[bold cyan]Sysdiag Analyzer Report[/bold cyan]\nHostname: {report.hostname or 'N/A'}\nTimestamp: {report.timestamp or 'N/A'}\nBoot ID: {report.boot_id or 'N/A'}",
+            title="System Overview",
+            border_style="green",
+            expand=False,
+        )
+    )
     if report.boot_analysis:
         format_boot_report(report.boot_analysis, console)
     else:
-        console.print(Panel("[dim]No boot analysis performed or data available.[/dim]", title="Boot Analysis", border_style="dim"))
+        console.print(
+            Panel(
+                "[dim]No boot analysis performed or data available.[/dim]",
+                title="Boot Analysis",
+                border_style="dim",
+            )
+        )
     if report.health_analysis:
         format_health_report(report.health_analysis, console)
     else:
-        console.print(Panel("[dim]No health analysis performed or data available.[/dim]", title="Service Health Analysis", border_style="dim"))
+        console.print(
+            Panel(
+                "[dim]No health analysis performed or data available.[/dim]",
+                title="Service Health Analysis",
+                border_style="dim",
+            )
+        )
     if report.resource_analysis:
         format_resource_report(report.resource_analysis, console)
     else:
-        console.print(Panel("[dim]No resource analysis performed or data available.[/dim]", title="Resource Analysis", border_style="dim"))
+        console.print(
+            Panel(
+                "[dim]No resource analysis performed or data available.[/dim]",
+                title="Resource Analysis",
+                border_style="dim",
+            )
+        )
     if report.log_analysis:
         format_log_report(report.log_analysis, console)
     else:
-        console.print(Panel("[dim]No log analysis performed or data available.[/dim]", title="Log Analysis", border_style="dim"))
+        console.print(
+            Panel(
+                "[dim]No log analysis performed or data available.[/dim]",
+                title="Log Analysis",
+                border_style="dim",
+            )
+        )
     if report.dependency_analysis:
         format_dependency_report(report.dependency_analysis, console)
     else:
-        console.print(Panel("[dim]No dependency analysis for failed units performed or data available.[/dim]", title="Dependency Analysis for Failed Units", border_style="dim"))
+        console.print(
+            Panel(
+                "[dim]No dependency analysis for failed units performed or data available.[/dim]",
+                title="Dependency Analysis for Failed Units",
+                border_style="dim",
+            )
+        )
     if report.full_dependency_analysis:
         format_full_dependency_report(report.full_dependency_analysis, console)
     if report.ebpf_analysis:
@@ -691,9 +1189,14 @@ def format_rich_report(report: Optional[SystemReport], console: Console) -> None
     if report.llm_analysis:
         format_llm_report(report.llm_analysis, console)
     if report.errors:
-         error_text = "\n".join(f"- [red]{err}[/red]" for err in report.errors)
-         console.print(Panel(error_text, title="Overall Analysis Errors", border_style="red", expand=False))
+        error_text = "\n".join(f"- [red]{err}[/red]" for err in report.errors)
+        console.print(
+            Panel(
+                error_text, title="Overall Analysis Errors", border_style="red", expand=False
+            )
+        )
     log.debug("format_rich_report finished.")
+
 
 def format_json_report(report: Optional[SystemReport]) -> str:
     """Formats the full system report as a JSON string."""
@@ -704,5 +1207,6 @@ def format_json_report(report: Optional[SystemReport]) -> str:
         return json.dumps(report_dict, indent=2, default=str)
     except Exception as e:
         log.error(f"Failed to serialize report to JSON: {e}")
-        return json.dumps({"error": "Failed to serialize report", "details": str(e)}, indent=2)
-
+        return json.dumps(
+            {"error": "Failed to serialize report", "details": str(e)}, indent=2
+        )

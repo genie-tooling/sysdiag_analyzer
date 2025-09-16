@@ -41,7 +41,6 @@ def run_subprocess(command: List[str]) -> Tuple[bool, str, str]:
         log.exception(f"An unexpected error occurred running command '{' '.join(command)}': {e}")
         return False, "", f"Unexpected error: {e}"
 
-# --- Added for Phase 7 ---
 _cached_boot_id: Optional[str] = None
 
 def get_boot_id() -> Optional[str]:
@@ -59,8 +58,6 @@ def get_boot_id() -> Optional[str]:
     try:
         success, stdout, stderr = run_subprocess(cmd)
         if success and stdout.strip():
-            # FIX: Handle JSON Lines output
-            boot_entry = None
             last_valid_entry = None
             for line in stdout.strip().splitlines():
                 try:
@@ -115,4 +112,3 @@ def get_boot_id() -> Optional[str]:
 
     log.error("Could not determine boot ID from journalctl or /proc.")
     return None
-# --- End Phase 7 Additions ---
