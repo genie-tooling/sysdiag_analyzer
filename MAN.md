@@ -1,4 +1,4 @@
-SYSDIAG-ANALYZER(1)           General Commands Manual          SYSDIAG-ANALYZER(1)
+SYSDIAG-ANALYZER(1)
 
 **NAME**
 

@@ -1,9 +1,3 @@
-Of course. Here is the updated `README.md` content, integrating detailed sections on `config.toml` and the specific steps required to enable eBPF functionality.
-
----
-
-# sysdiag-analyzer
-
 [![Python Package CI](https://github.com/systemd-smartfilter-architect/sysdiag-analyzer/actions/workflows/python-test.yml/badge.svg)](https://github.com/systemd-smartfilter-architect/sysdiag-analyzer/actions/workflows/python-test.yml)
 
 Systemd & System Health Diagnostic Tool. Version: 0.6.0 (Post-Phase 10)
