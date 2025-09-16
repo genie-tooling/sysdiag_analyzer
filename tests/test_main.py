@@ -169,8 +169,8 @@ def test_run_llm_fail_fast_no_provider(mock_load_config, mock_run_full, runner, 
         result = runner.invoke(app, ["run", "--analyze-llm"])
 
     assert result.exit_code == 1
-    stdout_clean = strip_ansi(result.stdout)
-    assert "'provider' is not specified in the [llm]" in stdout_clean # This should pass now
+    output_clean = strip_ansi(result.output)
+    assert "'provider' is not specified in the [llm]" in output_clean
     mock_run_full.assert_not_called()
 
 @patch('sysdiag_analyzer.main.run_full_analysis')
@@ -186,11 +186,10 @@ def test_run_llm_fail_fast_no_model(mock_load_config, mock_run_full, runner, moc
         result = runner.invoke(app, ["run", "--analyze-llm"])
 
     assert result.exit_code == 1
-    stdout_clean = strip_ansi(result.stdout)
-    assert "'model' is not specified" in stdout_clean
-    # Check the CORRECTED error message format
-    assert "in the [llm] section" in stdout_clean # This should pass now
-    assert "--llm-model" in stdout_clean
+    output_clean = strip_ansi(result.output)
+    assert "'model' is not specified" in output_clean
+    assert "in the [llm] section" in output_clean
+    assert "--llm-model" in output_clean
     mock_run_full.assert_not_called()
 
 # --- Test Persistence Logic (_save_report, _apply_retention) ---
