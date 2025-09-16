@@ -2,9 +2,9 @@ name: Python Package CI
 
 on:
   push:
-    branches: [ "main", "master" ] # Adjust branch names if necessary
+    branches: [ "main" ] # Adjust branch names if necessary
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ "main" ]
 
 jobs:
   test:
@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.11"] # Test against min and a recent version
+        python-version: ["3.11", "3.12", "3.13"] # Test against min and a recent version
 
     steps:
     - name: Checkout code
