@@ -1,4 +1,4 @@
-[![Python Package CI](https://github.com/genie-tooling/sysdiag-analyzer/actions/workflows/python-test.yml/badge.svg)](https://github.com/genie-tooling/sysdiag-analyzer/actions/workflows/python-test.yml)
+[![Python Package CI](https://github.com/genie-tooling/sysdiag_analyzer/actions/workflows/python-test.yml/badge.svg)](https://github.com/genie-tooling/sysdiag_analyzer/actions/workflows/python-test.yml)
 
 Systemd & System Health Diagnostic Tool. Version: 0.6.0 (Post-Phase 10)
 
