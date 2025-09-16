@@ -69,7 +69,7 @@ def mock_get_unit_properties_fallback_dep():
     """Mocks dependencies._get_unit_properties_fallback."""
     # Use the actual fallback from health module if available, otherwise mock
     try:
-        from sysdiag_analyzer.modules.health import _get_unit_properties_fallback as actual_fallback
+        from sysdiag_analyzer.modules.health import _get_unit_properties_fallback as actual_fallback  # noqa: F401
         patch_target = 'sysdiag_analyzer.modules.dependencies._get_unit_properties_fallback'
     except ImportError:
         # If health module isn't available during test setup, mock directly
@@ -105,17 +105,23 @@ def mock_get_unit_properties_fallback_dep():
             elif unit_name == "req1.service":
                 props = {}
                 for line in MOCK_SHOW_REQ1_ACTIVE.strip().splitlines():
-                    if "=" in line: key, value = line.split("=", 1); props[key.strip()] = value.strip()
+                    if "=" in line:
+                        key, value = line.split("=", 1)
+                        props[key.strip()] = value.strip()
                 return props
             elif unit_name == "req2.target":
                 props = {}
                 for line in MOCK_SHOW_REQ2_FAILED.strip().splitlines():
-                     if "=" in line: key, value = line.split("=", 1); props[key.strip()] = value.strip()
+                     if "=" in line:
+                        key, value = line.split("=", 1)
+                        props[key.strip()] = value.strip()
                 return props
             elif unit_name == "want1.service":
                 props = {}
                 for line in MOCK_SHOW_WANT1_INACTIVE.strip().splitlines():
-                     if "=" in line: key, value = line.split("=", 1); props[key.strip()] = value.strip()
+                     if "=" in line:
+                        key, value = line.split("=", 1)
+                        props[key.strip()] = value.strip()
                 return props
             elif unit_name == "req3.service":
                 # Simulate "not found" - _get_unit_properties_fallback returns None
@@ -123,7 +129,9 @@ def mock_get_unit_properties_fallback_dep():
             elif unit_name == "bind1.service":
                 props = {}
                 for line in MOCK_SHOW_BIND1_ACTIVE.strip().splitlines():
-                     if "=" in line: key, value = line.split("=", 1); props[key.strip()] = value.strip()
+                     if "=" in line:
+                        key, value = line.split("=", 1)
+                        props[key.strip()] = value.strip()
                 return props
             elif unit_name == "dep_fetch_error.service":
                  # Simulate failure fetching dependency props
@@ -243,13 +251,20 @@ def test_is_dependency_problematic(dep_type, load_state, active_state, sub_state
 def test_analyze_dependencies_success_fallback(mock_get_state, mock_get_unit_properties_fallback_dep, mock_dbus_manager_dep):
     # Configure mock for _get_dependency_state
     def get_state_side_effect(dep_name, dbus_manager):
-        if dep_name == "req1.service": return ("loaded", "active", "running", None)
-        if dep_name == "req2.target": return ("loaded", "failed", "failed", None)
-        if dep_name == "want1.service": return ("loaded", "inactive", "dead", None)
-        if dep_name == "network.target": return ("loaded", "active", "running", None)
-        if dep_name == "req3.service": return (None, None, None, "Failed to get props") # Simulate not found/error
-        if dep_name == "bind1.service": return ("loaded", "active", "running", None)
-        if dep_name == "other.service": return ("loaded", "active", "running", None)
+        if dep_name == "req1.service":
+            return ("loaded", "active", "running", None)
+        if dep_name == "req2.target":
+            return ("loaded", "failed", "failed", None)
+        if dep_name == "want1.service":
+            return ("loaded", "inactive", "dead", None)
+        if dep_name == "network.target":
+            return ("loaded", "active", "running", None)
+        if dep_name == "req3.service":
+            return (None, None, None, "Failed to get props") # Simulate not found/error
+        if dep_name == "bind1.service":
+            return ("loaded", "active", "running", None)
+        if dep_name == "other.service":
+            return ("loaded", "active", "running", None)
         return ("unknown", "unknown", "unknown", "Mock state not defined") # Default fallback
     mock_get_state.side_effect = get_state_side_effect
 
@@ -337,10 +352,14 @@ def test_analyze_dependencies_fetch_error(mock_get_state, mock_get_unit_properti
 def test_analyze_dependencies_dep_state_error(mock_get_state, mock_get_unit_properties_fallback_dep, mock_dbus_manager_dep, caplog):
     # Configure mock for _get_dependency_state to fail for one dep
     def get_state_side_effect(dep_name, dbus_manager):
-        if dep_name == "req1.service": return ("loaded", "active", "running", None)
-        if dep_name == "req2.target": return (None, None, None, "Mock DBus Timeout") # Error case
-        if dep_name == "want1.service": return ("loaded", "inactive", "dead", None)
-        if dep_name == "network.target": return ("loaded", "active", "running", None)
+        if dep_name == "req1.service":
+            return ("loaded", "active", "running", None)
+        if dep_name == "req2.target":
+            return (None, None, None, "Mock DBus Timeout") # Error case
+        if dep_name == "want1.service":
+            return ("loaded", "inactive", "dead", None)
+        if dep_name == "network.target":
+            return ("loaded", "active", "running", None)
         return ("unknown", "unknown", "unknown", "Mock state not defined")
     mock_get_state.side_effect = get_state_side_effect
 

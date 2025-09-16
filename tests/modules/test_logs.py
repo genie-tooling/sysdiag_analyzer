@@ -125,7 +125,7 @@ def mock_cysystemd_reader():
     # Simulate iteration
     mock_reader_instance.__iter__.return_value = iter(mock_records)
 
-    with patch('sysdiag_analyzer.modules.logs.JournalReader', return_value=mock_reader_instance) as mock_cls:
+    with patch('sysdiag_analyzer.modules.logs.JournalReader', return_value=mock_reader_instance):
         yield mock_reader_instance
 
 @pytest.fixture
@@ -297,7 +297,6 @@ def test_analyze_logs_fallback_json_error(mock_run_subprocess_logs, caplog):
     result = logs.analyze_general_logs(boot_offset=-98)
 
     assert result.analysis_error is not None # Error should be set now
-    # FIX: Check for the summary error message added after the loop
     assert "Errors occurred while parsing journalctl JSON output" in result.analysis_error
     assert "Skipping invalid JSON line" in caplog.text # Check log message
     assert result.log_source == "journalctl"

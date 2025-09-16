@@ -4,12 +4,10 @@ from unittest.mock import patch, MagicMock
 
 # Module to test
 from sysdiag_analyzer import llm_analyzer
-# FIX: Add missing imports
 from sysdiag_analyzer.datatypes import (
     SystemReport, LLMAnalysisResult, HealthAnalysisResult, UnitHealthInfo,
     MLAnalysisResult, AnomalyInfo
 )
-
 
 # Conditional import for Ollama
 try:
@@ -113,7 +111,6 @@ def test_generate_historical_summary_found(sample_report, mock_historical_data_l
 def test_create_llm_prompt(sample_report):
     history_summary = "Historical context: Unit 'failed.service' failed previously."
     prompt = llm_analyzer._create_llm_prompt(sample_report, history_summary)
-    # FIX: Assert the actual Markdown format
     assert "**Role:**" in prompt
     assert history_summary in prompt
 

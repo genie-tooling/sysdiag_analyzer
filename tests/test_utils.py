@@ -86,7 +86,6 @@ def test_get_boot_id_failure_journalctl_json_parse(mock_run_subprocess_util, moc
     mock_run_subprocess_util.assert_called_once()
     mock_proc_boot_id_path.is_file.assert_called_once()
     mock_proc_boot_id_path.read_text.assert_called_once()
-    # FIX: Update assertion to match actual log message
     assert "Failed to parse JSON line from journalctl --list-boots" in caplog.text
 
 def test_get_boot_id_failure_journalctl_empty_or_no_id(mock_run_subprocess_util, mock_proc_boot_id_path):

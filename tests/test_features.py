@@ -86,7 +86,6 @@ def test_load_history_success(mock_history_dir_features):
     os.utime(f2_path, (mtime2, mtime2))
     os.utime(f3_path, (mtime3, mtime3))
 
-    # FIX: Reinstate mock for gzip.open, ensuring it reads real content
     original_gzip_open = gzip.open # Store original
 
     def gzip_open_side_effect(filename, mode="rt", encoding="utf-8"):

@@ -721,7 +721,6 @@ def analyze_resources(
         result.system_usage = SystemResourceUsage(error=str(e))
 
     # 2. Get Per-Unit Usage (Requires provided unit list and DBus manager)
-    # --- MODIFIED: Check provided units list ---
     if not units:
         log.warning("No units provided for per-unit resource analysis.")
         err_msg = "No units provided for resource analysis"
@@ -764,7 +763,6 @@ def analyze_resources(
             )
             # Ensure unit_usage is an empty list on error
             result.unit_usage = []
-    # --- END MODIFIED ---
 
     # 3. Child Process Group Monitoring
     try:

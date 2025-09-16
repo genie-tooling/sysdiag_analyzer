@@ -91,14 +91,11 @@ def sample_feature_list():
 @pytest.fixture
 def sample_dataframe(sample_feature_list):
     """Provides a sample DataFrame prepared from feature list."""
-    if not pd: pytest.skip("Pandas not available")
+    if not pd:
+        pytest.skip("Pandas not available")
     df = pd.DataFrame(sample_feature_list)
     df['report_timestamp'] = pd.to_datetime(df['report_timestamp'])
 
-    # FIX: Aggregate features for the same unit/timestamp before proceeding
-    # Use mean for numeric, last for bool/string, sum for counts? Or first? Let's use first for simplicity.
-    # This ensures one row per unit per timestamp after combining resource/health sources.
-    # Define aggregation rules
     agg_rules = {}
     numeric_cols = [
         'cpu_usage_nsec', 'mem_current_bytes', 'mem_peak_bytes',
@@ -106,7 +103,6 @@ def sample_dataframe(sample_feature_list):
         'n_restarts', 'boot_blame_sec'
     ]
     bool_cols = ['is_failed', 'is_flapping', 'is_problematic_socket', 'is_problematic_timer']
-    string_cols = ['boot_id', 'source', 'resource_error', 'health_error']
 
     for col in df.columns:
         if col in ['unit_name', 'report_timestamp']:
@@ -169,7 +165,6 @@ def test_load_and_prepare_data_no_history(mock_feature_loading, tmp_path):
 def test_engineer_features_success(sample_dataframe):
     engineered_df = ml_engine.engineer_features(sample_dataframe.copy())
     assert isinstance(engineered_df, pd.DataFrame)
-    # FIX: Remove checks for removed lag/diff features
     # assert 'cpu_usage_nsec_lag1' in engineered_df.columns
     # Check for expected columns and ensure no NaNs in core numeric/bool
     expected_cols = [
@@ -195,7 +190,6 @@ def test_save_load_models(temp_model_dir_path):
     ml_engine.save_models(scalers_to_save, ml_engine.SCALER_MODEL_TYPE, temp_model_dir_path)
 
     # Check files exist in the temp path using the sanitized name
-    # FIX: Update filename based on _sanitize_filename replacing '.' with '_dot_'
     sanitized_name_stem = "unitA_dot_service"
     model_path = temp_model_dir_path / ml_engine.ANOMALY_MODEL_TYPE
     scaler_path = temp_model_dir_path / ml_engine.SCALER_MODEL_TYPE
@@ -208,7 +202,6 @@ def test_save_load_models(temp_model_dir_path):
 
     assert len(loaded_models) == 1
     assert len(loaded_scalers) == 1
-    # FIX: Check using the sanitized key used for loading
     assert sanitized_name_stem in loaded_models
     assert isinstance(loaded_models[sanitized_name_stem], IsolationForest)
     assert sanitized_name_stem in loaded_scalers # Check scaler loaded too
@@ -230,7 +223,6 @@ def test_train_anomaly_models_success(mock_save_models, sample_dataframe, temp_m
     train_df = engineered_df # Use the engineered data directly
 
     # Call train, passing the temp path
-    # FIX: Unpack 3 values now
     models, scalers, skipped_units = ml_engine.train_anomaly_models(train_df, temp_model_dir_path)
 
     assert len(models) == 2 # Should train for unitA and unitB
@@ -239,7 +231,6 @@ def test_train_anomaly_models_success(mock_save_models, sample_dataframe, temp_m
     # Check save_models was called with the correct path
     assert mock_save_models.call_count == 2
     mock_save_models.assert_any_call(models, ml_engine.ANOMALY_MODEL_TYPE, temp_model_dir_path)
-    # FIX: Use updated scaler type constant
     mock_save_models.assert_any_call(scalers, ml_engine.SCALER_MODEL_TYPE, temp_model_dir_path)
 
 # Test Anomaly Detection (No path arguments needed here)
@@ -249,7 +240,6 @@ def test_detect_anomalies_success(mock_save_models_ignored, sample_dataframe, te
     engineered_df_orig = ml_engine.engineer_features(sample_dataframe.copy())
 
     # 2. Train models using original engineered data
-    # FIX: Unpack 3 values
     models, scalers, skipped_units = ml_engine.train_anomaly_models(engineered_df_orig, temp_model_dir_path)
     assert models, "Models should have been trained"
     assert scalers, "Scalers should have been trained"
@@ -259,7 +249,6 @@ def test_detect_anomalies_success(mock_save_models_ignored, sample_dataframe, te
     # 3. Get the features used by the scaler/model
     scaler_unitA = scalers['unitA.service']
     model_unitA = models['unitA.service']
-    # FIX: Access feature names correctly
     training_features = list(getattr(scaler_unitA, 'feature_names_in_', []))
     assert training_features, "Scaler has no feature names stored"
 
@@ -277,7 +266,6 @@ def test_detect_anomalies_success(mock_save_models_ignored, sample_dataframe, te
     last_point_unitA['tasks_current'] = anomalous_tasks_value
     last_point_unitA['is_failed'] = True # Make it failed
 
-    # --- FIX: Lag/diff features removed, no need to modify them ---
     # Ensure required features exist before selecting
     missing_cols = [f for f in training_features if f not in last_point_unitA.columns]
     if missing_cols:
@@ -292,7 +280,6 @@ def test_detect_anomalies_success(mock_save_models_ignored, sample_dataframe, te
     features_for_prediction = last_point_unitA_filled[training_features].copy()
 
     # 7. Scale the anomalous point
-    # FIX 2: Convert boolean columns to int *before* scaling, directly on the copy
     for col in ['is_failed', 'is_flapping']:
         if col in features_for_prediction.columns:
             # Directly assign the converted Series back to the column on the copy
@@ -319,12 +306,8 @@ def test_detect_anomalies_success(mock_save_models_ignored, sample_dataframe, te
     if 'unit_name' not in detection_df.columns:
          detection_df['unit_name'] = 'unitA.service'
 
-    # --- FIX: Pass models/scalers keyed by SANITIZED names to detect_anomalies ---
     safe_models = {ml_engine._sanitize_filename(k): v for k, v in models.items()}
     safe_scalers = {ml_engine._sanitize_filename(k): v for k, v in scalers.items()}
     anomalies = ml_engine.detect_anomalies(detection_df, safe_models, safe_scalers)
     assert len(anomalies) == 1, "detect_anomalies function failed to find the single anomaly"
     assert anomalies[0].unit_name == 'unitA.service'
-
-
-# ... other detect_anomalies tests remain the same ...

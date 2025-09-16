@@ -207,7 +207,6 @@ def test_parse_critical_chain_output(stdout: str, expected_len: int, expected_su
             continue
 
         # Logic from _get_critical_chain_sync to strip tree chars from unit name
-        original_unit_name = unit_name
         unit_name = unit_name.lstrip(tree_chars).strip()
         if not unit_name:
             continue # Skip if unit name becomes empty after stripping
@@ -230,8 +229,10 @@ def test_parse_critical_chain_output(stdout: str, expected_len: int, expected_su
             indices_map = {0: 0, 1: 1, 2: 2, 3: 3, -1: -1}
             for i_subset, i_parsed in indices_map.items():
                  if i_subset < 0:
-                     if abs(i_subset) > len(expected_subset): continue
-                 elif i_subset >= len(expected_subset): continue
+                     if abs(i_subset) > len(expected_subset):
+                        continue
+                 elif i_subset >= len(expected_subset):
+                    continue
                  expected_item = expected_subset[i_subset]
 
                  if i_parsed < 0 :

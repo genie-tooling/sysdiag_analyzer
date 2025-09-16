@@ -5,6 +5,9 @@ import pytest
 from pathlib import Path
 from typing import Optional # Added List, Dict, Any
 from unittest.mock import patch, MagicMock
+# Modules and datatypes to test
+from sysdiag_analyzer.modules import resources
+from sysdiag_analyzer.datatypes import (SystemResourceUsage, UnitResourceUsage, UnitHealthInfo, ResourceAnalysisResult)
 
 # Conditional import for dbus
 try:
@@ -24,10 +27,6 @@ class MockDBusExceptionForTest(Exception if not HAS_DBUS_FOR_TESTS else dbus.exc
 if HAS_DBUS_FOR_TESTS:
     # Ensure the mock exception is used if dbus was imported
     dbus.exceptions.DBusException = MockDBusExceptionForTest
-
-# Modules and datatypes to test
-from sysdiag_analyzer.modules import resources
-from sysdiag_analyzer.datatypes import (SystemResourceUsage, UnitResourceUsage, UnitHealthInfo, ResourceAnalysisResult)
 
 # --- Mock Data ---
 MOCK_CPU_PERCENT = 15.5

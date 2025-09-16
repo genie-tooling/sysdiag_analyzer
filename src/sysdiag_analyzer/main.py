@@ -1,3 +1,4 @@
+# src/sysdiag_analyzer/main.py
 # -*- coding: utf-8 -*-
 
 import logging
@@ -13,15 +14,12 @@ from typing import Optional, List, Dict, Any
 import typer
 from rich.console import Console
 from rich.logging import RichHandler
-from rich.panel import Panel # Import Panel for config show
-from rich.syntax import Syntax # Import Syntax for config show
+from rich.panel import Panel
+from rich.syntax import Syntax
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 
 # --- Local Imports ---
-
-from . import features
-
 from .datatypes import (
     SystemReport,
     BootAnalysisResult,
@@ -34,7 +32,7 @@ from .datatypes import (
     LLMAnalysisResult,
     EBPFAnalysisResult,
     BootTimes,
-    UnitHealthInfo # Added UnitHealthInfo
+    UnitHealthInfo
 )
 from .modules.boot import analyze_boot as analyze_boot_logic
 from .modules.health import (
@@ -52,12 +50,14 @@ from .modules.dependencies import (
     analyze_dependencies as analyze_dependencies_logic,
     analyze_full_dependency_graph
 )
+from . import features
+
 # Import ML Engine
 try:
     from . import ml_engine
     HAS_ML_ENGINE = ml_engine.HAS_ML_LIBS
 except ImportError:
-    ml_engine = None # type: ignore
+    ml_engine = None
     HAS_ML_ENGINE = False
 
 # Import LLM Analyzer
@@ -66,7 +66,7 @@ try:
     HAS_LLM_OLLAMA = llm_analyzer.HAS_OLLAMA
     HAS_LLM_ENGINE = True
 except ImportError:
-    llm_analyzer = None # type: ignore
+    llm_analyzer = None
     HAS_LLM_ENGINE = False
     HAS_LLM_OLLAMA = False
 
@@ -79,7 +79,7 @@ from .output import (
     format_log_report
 )
 from .utils import get_boot_id
-from .config import load_config, DEFAULT_CONFIG # Import config loading
+from .config import load_config, DEFAULT_CONFIG
 
 # Import eBPF Monitor
 HAS_BCC = False
@@ -88,23 +88,25 @@ try:
     from .modules import ebpf_monitor
     HAS_EBPF_MONITOR = True
     HAS_BCC = ebpf_monitor.HAS_BCC
-    # REMOVED DEBUG PRINT
 except ImportError as e:
     log_ebpf_import = logging.getLogger(__name__)
     log_ebpf_import.warning(f"Could not import ebpf_monitor module: {e}. eBPF features disabled.", exc_info=False)
-    ebpf_monitor = None # type: ignore
+    ebpf_monitor = None
     HAS_EBPF_MONITOR = False
     HAS_BCC = False
 
-# --- Basic Configuration ---
 LOG_LEVEL = logging.INFO
-CONSOLE = Console(stderr=True)
+
+# Console for standard output (tables, results)
+CONSOLE = Console()
+# Console for logging and errors
+CONSOLE_ERR = Console(stderr=True)
 
 logging.basicConfig(
     level=LOG_LEVEL,
     format="%(message)s",
     datefmt="[%X]",
-    handlers=[RichHandler(console=CONSOLE, rich_tracebacks=True, show_path=False)]
+    handlers=[RichHandler(console=CONSOLE_ERR, rich_tracebacks=True, show_path=False)]
 )
 log = logging.getLogger(__name__)
 
@@ -113,8 +115,7 @@ app = typer.Typer(
 )
 
 # --- Helper Functions ---
-def check_privileges(required_for: str = "some checks") -> bool: # Added return type hint
-    """Warns if not running as root, as many checks require it."""
+def check_privileges(required_for: str = "some checks") -> bool:
     is_root = False
     try:
         if os.geteuid() == 0:
@@ -131,7 +132,6 @@ def check_privileges(required_for: str = "some checks") -> bool: # Added return 
 
 # --- Persistence Logic (_save_report, _apply_retention) ---
 def _save_report(report: SystemReport, history_dir: Path):
-    """Saves the report to the history directory."""
     log.info("Attempting to save analysis report...")
     boot_id = report.boot_id or get_boot_id() or "unknown_boot"
     timestamp_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -167,7 +167,6 @@ def _save_report(report: SystemReport, history_dir: Path):
 
 
 def _apply_retention(history_dir: Path, max_files: int):
-    """Applies the retention policy to the history directory."""
     log.info(f"Applying retention policy (max {max_files} files) in {history_dir}...")
     try:
         history_files = sorted(
@@ -197,10 +196,7 @@ def _run_core_analyses(
     dbus_manager: Optional[Any],
     analyze_full_graph: bool,
 ) -> SystemReport:
-    """Runs the synchronous analysis modules."""
-    # This function now contains the logic that used to be directly in run_full_analysis
 
-    # Boot analysis
     try:
         report.boot_analysis = analyze_boot_logic()
     except Exception as e:
@@ -212,7 +208,6 @@ def _run_core_analyses(
             report.boot_analysis.times = BootTimes()
         report.boot_analysis.times.error = report.boot_analysis.times.error or f"Failed to get result: {e}"
 
-    # Health analysis
     try:
         report.health_analysis = analyze_health_logic(units=all_units, dbus_manager=dbus_manager)
     except Exception as e:
@@ -223,7 +218,6 @@ def _run_core_analyses(
         else:
             report.health_analysis.analysis_error = report.health_analysis.analysis_error or f"Failed to get result: {e}"
 
-    # Resource analysis
     try:
         report.resource_analysis = analyze_resources_logic(units=all_units, dbus_manager=dbus_manager)
     except Exception as e:
@@ -234,7 +228,6 @@ def _run_core_analyses(
         else:
             report.resource_analysis.analysis_error = report.resource_analysis.analysis_error or f"Failed to get result: {e}"
 
-    # Dependency analysis (Failed Units)
     try:
         failed_units_to_analyze = report.health_analysis.failed_units if report.health_analysis else []
         if failed_units_to_analyze:
@@ -251,7 +244,6 @@ def _run_core_analyses(
         else:
             report.dependency_analysis.analysis_error = report.dependency_analysis.analysis_error or f"Failed to get result: {e}"
 
-    # Full Dependency Graph Analysis (Optional)
     if analyze_full_graph:
         log.info("Full dependency graph analysis requested.")
         try:
@@ -268,7 +260,6 @@ def _run_core_analyses(
     else:
          log.info("Skipping full dependency graph analysis (flag not set).")
 
-    # Log analysis
     try:
         report.log_analysis = analyze_logs_logic()
     except Exception as e:
@@ -294,7 +285,6 @@ def run_full_analysis(
     analyze_llm: bool = False,
     llm_config: Optional[Dict[str, Any]] = None,
 ) -> SystemReport:
-    """Gathers all analysis data, handling eBPF concurrently."""
     log.info("Starting full system analysis...")
     is_root = check_privileges(required_for="eBPF tracing, cgroup access, DBus, journal")
 
@@ -310,10 +300,8 @@ def run_full_analysis(
         report.errors.append("Analysis performed with empty unit list.")
 
     ebpf_collector = None
-    # --- eBPF Setup and Concurrent Execution ---
     if enable_ebpf:
         if not is_root or not HAS_EBPF_MONITOR or not HAS_BCC or not ebpf_monitor:
-            # Handle prerequisites checks and report errors
             error_msg = ""
             if not is_root:
                 error_msg = "Root privileges required."
@@ -327,13 +315,11 @@ def run_full_analysis(
             report.ebpf_analysis = EBPFAnalysisResult(error=error_msg)
         else:
             try:
-                # Start the collector
                 log.info("Initializing eBPF monitoring...")
                 ebpf_collector = ebpf_monitor.EBPFCollector()
                 ebpf_collector.start()
                 log.info("eBPF monitoring started. Running core analysis in background...")
 
-                # Run core analyses in a background thread
                 with ThreadPoolExecutor(max_workers=1, thread_name_prefix="CoreAnalysis") as executor:
                     analysis_future = executor.submit(
                         _run_core_analyses,
@@ -342,13 +328,10 @@ def run_full_analysis(
                         dbus_manager,
                         analyze_full_graph,
                     )
-
-                    # Poll for eBPF events while core analysis is running
                     while not analysis_future.done():
                         ebpf_collector.poll_events(timeout_ms=100)
-                        time.sleep(0.1) # Prevent a tight loop
+                        time.sleep(0.1)
 
-                    # Get the result from the background thread
                     report = analysis_future.result()
                     log.info("Core analysis finished.")
 
@@ -357,14 +340,12 @@ def run_full_analysis(
                 report.errors.append(f"eBPF initialization/run failed: {e}")
                 report.ebpf_analysis = EBPFAnalysisResult(error=f"Initialization failed: {e}")
                 if ebpf_collector and ebpf_collector._running:
-                    ebpf_collector.stop() # Attempt to clean up
+                    ebpf_collector.stop()
                 ebpf_collector = None
     else:
-        # --- Synchronous Path (eBPF Disabled) ---
         log.info("Skipping eBPF analysis (flag not set). Running core analysis synchronously.")
         report = _run_core_analyses(report, all_units, dbus_manager, analyze_full_graph)
 
-    # --- eBPF Teardown (if it was started) ---
     if ebpf_collector:
         log.info("Stopping eBPF monitoring and collecting events...")
         try:
@@ -378,7 +359,6 @@ def run_full_analysis(
                 report.ebpf_analysis = EBPFAnalysisResult()
             report.ebpf_analysis.error = err_msg
 
-    # --- ML and LLM Analysis (run after core analysis is complete) ---
     if analyze_ml:
         log.info("ML analysis requested.")
         ml_result = MLAnalysisResult()
@@ -388,7 +368,6 @@ def run_full_analysis(
             log.error(ml_result.error)
         else:
             try:
-                # 1. Load the pre-trained models and scalers
                 log.info(f"Loading ML models and scalers from {model_dir}...")
                 anomaly_models = ml_engine.load_models(ml_engine.ANOMALY_MODEL_TYPE, model_dir)
                 scalers = ml_engine.load_models(ml_engine.SCALER_MODEL_TYPE, model_dir)
@@ -398,7 +377,6 @@ def run_full_analysis(
                     ml_result.error = "No pre-trained models or scalers found. Run 'retrain-ml' first."
                     log.warning(ml_result.error)
                 else:
-                    # 2. Extract features from the CURRENT report for anomaly detection
                     log.info("Extracting features from current report for ML analysis...")
                     current_report_dict = asdict(report)
                     current_features_list = features.extract_features_from_report(current_report_dict)
@@ -407,29 +385,22 @@ def run_full_analysis(
                         log.warning("No features extracted from the current report for ML analysis.")
                         ml_result.error = "No features to analyze in the current report."
                     else:
-                        # 3. Convert the current features list into a DataFrame
                         log.debug(f"Converting {len(current_features_list)} feature sets from current report into a DataFrame.")
                         current_features_df = ml_engine.pd.DataFrame(current_features_list)
-                        
-                        # Perform minimal preparation similar to load_and_prepare_data
                         current_features_df['report_timestamp'] = ml_engine.pd.to_datetime(current_features_df['report_timestamp'])
-
-                        # 4. Engineer the current features
                         engineered_df = ml_engine.engineer_features(current_features_df)
                         ml_result.units_analyzed_count = engineered_df['unit_name'].nunique() if not engineered_df.empty else 0
-
-                        # 5. Detect anomalies
+                        
                         if not engineered_df.empty:
                             log.info(f"Running anomaly detection for {ml_result.units_analyzed_count} units...")
                             anomalies = ml_engine.detect_anomalies(engineered_df, anomaly_models, scalers)
                             ml_result.anomalies_detected = anomalies
                         else:
                             log.warning("Feature engineering resulted in an empty DataFrame; skipping anomaly detection.")
-
             except Exception as e:
                 log.exception("An unexpected error occurred during ML analysis.")
                 ml_result.error = f"ML analysis failed: {e}"
-    
+
     if analyze_llm:
         log.info("LLM synthesis requested.")
         if not llm_config:
@@ -439,11 +410,10 @@ def run_full_analysis(
         else:
             try:
                 log.info(f"Invoking LLM analysis with model '{llm_config.get('model')}'...")
-                # Call the main LLM analysis function and assign its result to the report
                 report.llm_analysis = llm_analyzer.analyze_with_llm(
                     report=report,
                     llm_config=llm_config,
-                    history_dir=history_dir  # Pass the history_dir Path object
+                    history_dir=history_dir
                 )
             except Exception as e:
                 log.exception("An unexpected error occurred during LLM analysis.")
@@ -468,7 +438,7 @@ def config_show(
         CONSOLE.print(Panel(syntax, title="Loaded Configuration", border_style="blue"))
     except Exception as e:
         log.exception("Failed to load or display configuration.")
-        CONSOLE.print(f"[bold red]Error:[/bold red] Failed to load or display configuration: {e}")
+        CONSOLE_ERR.print(f"[bold red]Error:[/bold red] Failed to load or display configuration: {e}")
         raise typer.Exit(code=1)
 
 
@@ -484,20 +454,13 @@ def run(
     llm_model: Optional[str] = typer.Option(None, "--llm-model", help="Override the LLM model specified in the config file."),
     no_save: bool = typer.Option(False, "--no-save", help="Do not save the analysis report to the history directory."),
 ):
-    """
-    Run a full system health analysis (Boot, Services, Resources, Logs, Dependencies).
-    Optionally includes full dependency graph cycle detection, ML anomaly detection,
-    LLM-based synthesis, and eBPF process tracing. Saves report by default.
-    """
     report: Optional[SystemReport] = None
     try:
-        # --- Load Config ---
         app_config = load_config(config_path_override=config_file)
         current_history_dir = Path(app_config.get("history", {}).get("directory", DEFAULT_CONFIG["history"]["directory"]))
         current_max_history = app_config.get("history", {}).get("max_files", DEFAULT_CONFIG["history"]["max_files"])
         current_model_dir = Path(app_config.get("models", {}).get("directory", DEFAULT_CONFIG["models"]["directory"]))
 
-        # --- LLM Fail-Fast Validation ---
         effective_llm_config = None
         if analyze_llm:
             log.debug("Performing pre-analysis LLM configuration checks...")
@@ -505,27 +468,24 @@ def run(
             provider_name = llm_config_section.get("provider")
             effective_model_name = llm_model or llm_config_section.get("model")
             if not HAS_LLM_ENGINE:
-                CONSOLE.print("[bold red]Error:[/bold red] LLM analysis requested, but LLM dependencies are not installed.")
-                CONSOLE.print("Install with: [cyan]pip install sysdiag-analyzer[llm][/cyan]")
+                CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM analysis requested, but LLM dependencies are not installed.")
+                CONSOLE_ERR.print("Install with: [cyan]pip install sysdiag-analyzer[llm][/cyan]")
                 raise typer.Exit(code=1)
             if not provider_name:
-                CONSOLE.print("[bold red]Error:[/bold red] LLM analysis requested, but 'provider' is not specified in the \[llm] section of the configuration file.")
+                CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM analysis requested, but 'provider' is not specified in the \[llm] section of the configuration file.")
                 raise typer.Exit(code=1)
             if not effective_model_name:
-                CONSOLE.print("[bold red]Error:[/bold red] LLM analysis requested, but 'model' is not specified in the \[llm] section of the configuration file and not provided via --llm-model.")
+                CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM analysis requested, but 'model' is not specified in the \[llm] section of the configuration file and not provided via --llm-model.")
                 raise typer.Exit(code=1)
             if provider_name == "ollama" and not HAS_LLM_OLLAMA:
-                CONSOLE.print("[bold red]Error:[/bold red] LLM provider 'ollama' configured, but the 'ollama' library is not installed.")
-                CONSOLE.print("Install with: [cyan]pip install sysdiag-analyzer[llm][/cyan]")
+                CONSOLE_ERR.print("[bold red]Error:[/bold red] LLM provider 'ollama' configured, but the 'ollama' library is not installed.")
+                CONSOLE_ERR.print("Install with: [cyan]pip install sysdiag-analyzer[llm][/cyan]")
                 raise typer.Exit(code=1)
             effective_llm_config = llm_config_section.copy()
             effective_llm_config["model"] = effective_model_name
             log.debug("LLM pre-analysis configuration checks passed.")
 
-        # --- Connect to DBus Once ---
         dbus_manager = _get_systemd_manager_interface()
-
-        # --- Fetch Unit List Once ---
         all_units: List[UnitHealthInfo] = []
         fetch_error: Optional[str] = None
         log.info("Fetching unit list...")
@@ -541,21 +501,19 @@ def run(
         if fetch_error:
             if not all_units:
                 log.error(f"Failed to get unit list: {fetch_error}")
-                CONSOLE.print(f"[bold red]Error:[/bold red] Failed to retrieve unit list ({fetch_error}). Analysis cannot proceed.")
+                CONSOLE_ERR.print(f"[bold red]Error:[/bold red] Failed to retrieve unit list ({fetch_error}). Analysis cannot proceed.")
                 raise typer.Exit(code=1)
             else:
                 log.warning(f"Initial unit fetch failed ({fetch_error}), but fallback succeeded.")
         elif not all_units:
             log.warning("No units found for analysis.")
-            CONSOLE.print("[yellow]Warning:[/yellow] No systemd units found. Analysis may be incomplete.")
-            # Allow continuing, but the report will be mostly empty
+            CONSOLE_ERR.print("[yellow]Warning:[/yellow] No systemd units found. Analysis may be incomplete.")
 
-        # --- Run Analysis ---
         report = run_full_analysis(
             history_dir=current_history_dir,
             model_dir=current_model_dir,
-            all_units=all_units,         # Pass fetched units
-            dbus_manager=dbus_manager,   # Pass manager object
+            all_units=all_units,
+            dbus_manager=dbus_manager,
             since=since,
             enable_ebpf=enable_ebpf,
             analyze_full_graph=analyze_full_graph,
@@ -564,7 +522,6 @@ def run(
             llm_config=effective_llm_config,
         )
 
-        # --- Persistence ---
         if not no_save:
             if report:
                 _save_report(report, current_history_dir)
@@ -574,29 +531,25 @@ def run(
         else:
             log.info("Skipping report saving as per --no-save flag.")
 
-        # --- Output ---
         if output == "rich":
             format_rich_report(report, CONSOLE)
         elif output == "json":
-            print(format_json_report(report))
+            CONSOLE.print(format_json_report(report))
         else:
             log.error(f"Unsupported output format: {output}")
             raise typer.Exit(code=1)
 
-        # --- Exit Code ---
         exit_code = 0
         if report:
-            # A non-zero exit code should be triggered by definite failures or tool errors.
             if report.health_analysis and report.health_analysis.failed_units:
                 exit_code = 1
             elif report.llm_analysis and report.llm_analysis.error:
                 exit_code = 1
             elif report.ebpf_analysis and report.ebpf_analysis.error:
                 exit_code = 1
-            elif report.errors: # Check the report's top-level error list
+            elif report.errors:
                 exit_code = 1
         else:
-             # If no report was generated at all, that's an error.
              exit_code = 1
 
         if exit_code != 0:
@@ -610,18 +563,11 @@ def run(
         if not isinstance(e, typer.Exit):
              raise typer.Exit(code=1)
 
-
-# --- retrain-ml Command ---
 @app.command()
 def retrain_ml(
     num_reports: int = typer.Option(50, "--num-reports", "-n", help="Number of recent history reports to use for training."),
     config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to a custom TOML configuration file.", exists=False, file_okay=True, dir_okay=False, readable=True),
 ):
-    """
-    Load historical data and retrain the ML anomaly detection models.
-    Requires root privileges to save models to the default location.
-    """
-    # (Logic remains the same)
     log.info("Starting ML model retraining process...")
     check_privileges(required_for="saving models to default location")
 
@@ -634,8 +580,8 @@ def retrain_ml(
         ml_engine.MIN_SAMPLES_FOR_TRAINING = models_cfg.get("min_samples_train", ml_engine.MIN_SAMPLES_FOR_TRAINING)
 
     if not HAS_ML_ENGINE or not ml_engine:
-        CONSOLE.print("[red]Error: ML dependencies (pandas, scikit-learn, joblib) not installed. Cannot retrain.[/red]")
-        CONSOLE.print("Install with: pip install sysdiag-analyzer[ml]")
+        CONSOLE_ERR.print("[red]Error: ML dependencies (pandas, scikit-learn, joblib) not installed. Cannot retrain.[/red]")
+        CONSOLE_ERR.print("Install with: pip install sysdiag-analyzer[ml]")
         raise typer.Exit(code=1)
 
     if not current_model_dir.exists():
@@ -643,10 +589,10 @@ def retrain_ml(
             log.info(f"Attempting to create model directory: {current_model_dir}")
             current_model_dir.mkdir(parents=True, mode=0o700)
         except PermissionError:
-             CONSOLE.print(f"[red]Error: Permission denied creating model directory: {current_model_dir}. Run with sudo?[/red]")
+             CONSOLE_ERR.print(f"[red]Error: Permission denied creating model directory: {current_model_dir}. Run with sudo?[/red]")
              raise typer.Exit(code=1)
         except Exception as e:
-             CONSOLE.print(f"[red]Error creating model directory {current_model_dir}: {e}[/red]")
+             CONSOLE_ERR.print(f"[red]Error creating model directory {current_model_dir}: {e}[/red]")
              raise typer.Exit(code=1)
 
     features_df = ml_engine.load_and_prepare_data(history_dir=current_history_dir, num_reports=num_reports)
@@ -657,7 +603,7 @@ def retrain_ml(
     try:
         engineered_df = ml_engine.engineer_features(features_df)
         if engineered_df is None or engineered_df.empty:
-            CONSOLE.print("[red]Error: Feature engineering failed. Check logs.[/red]")
+            CONSOLE_ERR.print("[red]Error: Feature engineering failed. Check logs.[/red]")
             raise typer.Exit(code=1)
 
         CONSOLE.print("Training anomaly detection models (Isolation Forest)...")
@@ -673,38 +619,35 @@ def retrain_ml(
 
     except PermissionError as e:
          log.error(f"Permission denied during model saving: {e}")
-         CONSOLE.print(f"[red]Error: Permission denied saving models to {current_model_dir}. Run with sudo?[/red]")
+         CONSOLE_ERR.print(f"[red]Error: Permission denied saving models to {current_model_dir}. Run with sudo?[/red]")
          raise typer.Exit(code=1)
     except Exception as e:
         log.exception(f"An unexpected error occurred during ML retraining: {e}")
-        CONSOLE.print(f"[red]An unexpected error occurred during retraining: {e}[/red]")
+        CONSOLE_ERR.print(f"[red]An unexpected error occurred during retraining: {e}[/red]")
         raise typer.Exit(code=1)
 
     log.info("ML model retraining finished.")
 
-# --- show-history Command ---
 @app.command()
 def show_history(
     limit: int = typer.Option(5, "--limit", "-n", help="Number of recent reports to show metadata for."),
     output: str = typer.Option("rich", "--output", "-o", help="Output format ('rich' or 'json')."),
     config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to a custom TOML configuration file.", exists=False, file_okay=True, dir_okay=False, readable=True),
 ):
-    """List metadata about recent analysis reports stored in the history."""
     app_config = load_config(config_path_override=config_file)
     current_history_dir = Path(app_config.get("history", {}).get("directory", DEFAULT_CONFIG["history"]["directory"]))
 
     log.info(f"Listing metadata for last {limit} reports from {current_history_dir}...")
     if not current_history_dir.is_dir():
-        CONSOLE.print(f"[yellow]History directory not found:[/yellow] {current_history_dir}")
+        CONSOLE_ERR.print(f"[yellow]History directory not found:[/yellow] {current_history_dir}")
         raise typer.Exit(code=1)
 
     try:
         history_files = sorted(
             current_history_dir.glob("report-*.jsonl.gz"),
             key=os.path.getmtime,
-            reverse=True # Newest first
+            reverse=True
         )
-
         reports_meta = []
         for i, report_file in enumerate(history_files[:limit]):
              try:
@@ -723,7 +666,6 @@ def show_history(
              except OSError as stat_e:
                   log.error(f"Could not stat history file {report_file.name}: {stat_e}")
 
-
         if not reports_meta:
              CONSOLE.print("[dim]No history reports found.[/dim]")
              return
@@ -732,7 +674,6 @@ def show_history(
              from rich.table import Table
              table = Table(title=f"Recent Analysis Reports (Last {len(reports_meta)})", show_header=True, header_style="bold magenta")
              table.add_column("#", style="dim", width=3)
-             # FIX: Added no_wrap=True to prevent the filename from being truncated
              table.add_column("Filename", style="cyan", no_wrap=True)
              table.add_column("Size (KiB)", style="green", justify="right")
              table.add_column("Saved Timestamp (UTC)", style="yellow")
@@ -740,7 +681,7 @@ def show_history(
                   table.add_row(str(meta["index"]), meta["filename"], meta["size_kb"], meta["modified_utc"])
              CONSOLE.print(table)
         elif output == "json":
-             print(json.dumps(reports_meta, indent=2))
+             CONSOLE.print(json.dumps(reports_meta, indent=2))
         else:
             log.error(f"Unsupported output format: {output}")
             raise typer.Exit(code=1)
@@ -749,23 +690,19 @@ def show_history(
         log.exception(f"Error accessing or listing history directory {current_history_dir}: {e}")
         raise typer.Exit(code=1)
 
-# --- analyze_unit Command (Still stubbed) ---
 @app.command()
 def analyze_unit(
     unit_name: str = typer.Argument(..., help="The name of the systemd unit to analyze (e.g., 'nginx.service')."),
     output: str = typer.Option("rich", "--output", "-o", help="Output format ('rich' or 'json')."),
 ):
-    """Perform a focused analysis on a specific systemd unit (Not Implemented Yet)."""
     check_privileges()
     log.warning(f"Analysis for specific unit '{unit_name}' is not yet implemented.")
     CONSOLE.print(f"Placeholder: Would analyze {unit_name} with output format {output}")
 
-# --- analyze_* specific commands (updated to use fetch logic) ---
 @app.command()
 def analyze_boot(
     output: str = typer.Option("rich", "--output", "-o", help="Output format ('rich' or 'json')."),
 ):
-    """Analyze the last system boot performance."""
     check_privileges()
     log.info("Starting boot-only analysis...")
     try:
@@ -774,7 +711,7 @@ def analyze_boot(
             if output == "rich":
                 format_boot_report(result, CONSOLE)
             elif output == "json":
-                print(json.dumps(asdict(result), indent=2, default=str))
+                CONSOLE.print(json.dumps(asdict(result), indent=2, default=str))
             else:
                 log.error(f"Unsupported output format: {output}")
                 raise typer.Exit(code=1)
@@ -789,12 +726,10 @@ def analyze_boot(
 def analyze_health(
     output: str = typer.Option("rich", "--output", "-o", help="Output format ('rich' or 'json')."),
 ):
-    """Analyze the health of systemd units (failed, flapping, sockets, timers)."""
     check_privileges()
     log.info("Starting health-only analysis...")
     try:
         dbus_manager = _get_systemd_manager_interface()
-        # Fetch units first
         units, fetch_error = [], None
         if dbus_manager:
             units, fetch_error = _get_all_units_dbus(dbus_manager)
@@ -808,13 +743,12 @@ def analyze_health(
             CONSOLE.print("[yellow]No units found.[/yellow]")
             raise typer.Exit(code=0)
 
-        # Pass fetched units to analysis function
         result = analyze_health_logic(units=units, dbus_manager=dbus_manager)
         if result:
             if output == "rich":
                 format_health_report(result, CONSOLE)
             elif output == "json":
-                print(json.dumps(asdict(result), indent=2, default=str))
+                CONSOLE.print(json.dumps(asdict(result), indent=2, default=str))
             else:
                 log.error(f"Unsupported output format: {output}")
                 raise typer.Exit(code=1)
@@ -829,12 +763,10 @@ def analyze_health(
 def analyze_resources(
     output: str = typer.Option("rich", "--output", "-o", help="Output format ('rich' or 'json')."),
 ):
-    """Analyze system and unit resource use (incl. child process groups)."""
     check_privileges()
     log.info("Starting resource-only analysis...")
     try:
         dbus_manager = _get_systemd_manager_interface()
-        # Fetch units first
         units, fetch_error = [], None
         if dbus_manager:
             units, fetch_error = _get_all_units_dbus(dbus_manager)
@@ -848,13 +780,12 @@ def analyze_resources(
             CONSOLE.print("[yellow]No units found.[/yellow]")
             raise typer.Exit(code=0)
 
-        # Pass fetched units to analysis function
         result = analyze_resources_logic(units=units, dbus_manager=dbus_manager)
         if result:
             if output == "rich":
                 format_resource_report(result, CONSOLE)
             elif output == "json":
-                print(json.dumps(asdict(result), indent=2, default=str))
+                CONSOLE.print(json.dumps(asdict(result), indent=2, default=str))
             else:
                 log.error(f"Unsupported output format: {output}")
                 raise typer.Exit(code=1)
@@ -871,8 +802,6 @@ def analyze_logs(
     boot: int = typer.Option(0, "--boot", "-b", help="Boot offset (0=current, -1=previous, etc.)."),
     priority: int = typer.Option(DEFAULT_ANALYSIS_LEVEL, "--priority", "-p", min=0, max=7, help="Minimum priority level to analyze (0=emerg..7=debug)."),
 ):
-    """Analyze system logs for OOM events and common error/warning patterns."""
-    # (Logic remains the same)
     check_privileges()
     log.info(f"Starting log-only analysis (boot={boot}, min_priority={priority})...")
     try:
@@ -881,7 +810,7 @@ def analyze_logs(
             if output == "rich":
                 format_log_report(result, CONSOLE)
             elif output == "json":
-                print(json.dumps(asdict(result), indent=2, default=str))
+                CONSOLE.print(json.dumps(asdict(result), indent=2, default=str))
             else:
                 log.error(f"Unsupported output format: {output}")
                 raise typer.Exit(code=1)

@@ -6,12 +6,16 @@ import datetime
 import json # Needed for fallback
 from typing import List, Optional, Tuple, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, Future
+from ..datatypes import BootAnalysisResult, BootTimes, BootBlameItem, CriticalChainItem
+# Import run_subprocess directly for use in _get_critical_chain_sync
+from ..utils import run_subprocess
 
 log = logging.getLogger(__name__)
 # Create a specific logger for blame processing details if needed
 log_blame_detail = logging.getLogger(__name__ + ".blame_detail")
 # Set its level to DEBUG if you want to see the detailed entry logs
 # log_blame_detail.setLevel(logging.DEBUG)
+
 
 
 # --- Native Journal Binding Detection ---
@@ -32,7 +36,7 @@ except ImportError:
     try:
         # Fallback check for older python-systemd
         # python-systemd reader uses methods like this_boot() after Reader()
-        from systemd import journal, id128 # type: ignore
+        from systemd import journal # type: ignore
         HAS_PYTHON_SYSTEMD = True
         # Map python-systemd Reader to expected name for simplicity later
         JournalReader = journal.Reader # type: ignore
@@ -57,13 +61,6 @@ except ImportError:
 
 # Flag indicating if *any* native binding is available
 HAS_NATIVE_JOURNAL = HAS_CYSYSTEMD or HAS_PYTHON_SYSTEMD
-
-# --- End Native Journal Binding Detection ---
-
-
-from ..datatypes import BootAnalysisResult, BootTimes, BootBlameItem, CriticalChainItem
-# Import run_subprocess directly for use in _get_critical_chain_sync
-from ..utils import run_subprocess
 
 # Patterns and Constants
 TIME_VALUE_PATTERN = r"[\d.]+\s?[a-z]+"
@@ -293,13 +290,18 @@ def _get_boot_blame_journal() -> Tuple[List[BootBlameItem], Optional[str]]:
                     if log_blame_detail.isEnabledFor(logging.DEBUG):
                         if skipped_for_missing_fields % log_interval == 1 or not unit or not timestamp or not message:
                              reason = []
-                             if not unit: reason.append("missing _SYSTEMD_UNIT")
-                             if not timestamp: reason.append("missing/unparsed timestamp")
-                             if not message: reason.append("missing MESSAGE")
+                             if not unit:
+                                reason.append("missing _SYSTEMD_UNIT")
+                             if not timestamp:
+                                reason.append("missing/unparsed timestamp")
+                             if not message:
+                                reason.append("missing MESSAGE")
                              ts_val_log = entry_data.get('__REALTIME_TIMESTAMP') if entry_data else 'N/A'
                              if source_type == "cysystemd" and record:
-                                 try: ts_val_log = record.get_realtime_usec()
-                                 except: pass
+                                 try:
+                                    ts_val_log = record.get_realtime_usec()
+                                 except:  # noqa: E722
+                                    pass
                              message_snippet = message[:100] + '...' if message and len(message) > 100 else message
                              log_blame_detail.debug(
                                  f"Skipping entry {i}: Reason(s): {', '.join(reason)}. "
@@ -420,7 +422,6 @@ def _get_critical_chain_sync() -> Tuple[List[CriticalChainItem], Optional[str]]:
             log.debug(f"Chain likely starts at line: {lines[start_index]!r}")
             break
 
-    # --- Revised Parsing Loop ---
     for line_num, line in enumerate(lines[start_index:]):
         line = line.rstrip() # Keep leading spaces
         log.debug(f"Processing critical chain line {line_num} (after skip): {line!r}")
@@ -469,8 +470,6 @@ def _get_critical_chain_sync() -> Tuple[List[CriticalChainItem], Optional[str]]:
             time_delta=time_delta.strip() if time_delta else None,
             indent=indent
         ))
-    # --- End Revised Parsing Loop ---
-
 
     if not chain_list and not error:
          # If we skipped headers but still got no units, report parsing failure

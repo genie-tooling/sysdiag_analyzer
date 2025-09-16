@@ -92,7 +92,6 @@ def test_run_command_flags(
     mock_get_manager.assert_called_once()
     mock_get_units_dbus.assert_called_once()
     mock_get_units_json.assert_not_called()
-    # FIX: Update assertion to include all_units and dbus_manager
     mock_run_full.assert_called_with(
         history_dir=Path(mock_default_config["history"]["directory"]),
         model_dir=Path(mock_default_config["models"]["directory"]),
@@ -116,7 +115,6 @@ def test_run_command_flags(
     assert result.exit_code == 0
     mock_load_config.assert_called_with(config_path_override=Path("/custom/path.toml"))
     mock_get_units_dbus.assert_called_once()
-    # FIX: Update assertion
     mock_run_full.assert_called_with(
         history_dir=Path(mock_default_config["history"]["directory"]),
         model_dir=Path(mock_default_config["models"]["directory"]),
@@ -148,7 +146,6 @@ def test_run_command_flags(
     assert result.exit_code == 0
     mock_load_config.assert_called_with(config_path_override=None)
     mock_get_units_dbus.assert_called_once()
-    # FIX: Update assertion
     mock_run_full.assert_called_with(
         history_dir=Path(mock_default_config["history"]["directory"]),
         model_dir=Path(mock_default_config["models"]["directory"]),
@@ -269,12 +266,11 @@ def test_run_command_integration_save(
 
     assert result.exit_code == 0
     mock_get_units_dbus.assert_called_once()
-    # FIX: Update assertion
     mock_run_full.assert_called_once_with(
         history_dir=Path(mock_default_config["history"]["directory"]),
         model_dir=Path(mock_default_config["models"]["directory"]),
-        all_units=mock_unit_list,      # Added
-        dbus_manager=ANY,              # Added
+        all_units=mock_unit_list,
+        dbus_manager=ANY,
         since=None, enable_ebpf=False, analyze_full_graph=False, analyze_ml=False,
         analyze_llm=False, llm_config=None
     )

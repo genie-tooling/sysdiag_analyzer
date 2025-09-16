@@ -61,10 +61,6 @@ def _get_dependency_state(
     load_state, active_state, sub_state, error = None, None, None, None
     props: Optional[Dict[str, Any]] = None
 
-    # DBus Path (using GetUnitProperties or ListUnitsByNames is complex, use show for now)
-    # Simplified: Use the same property fetching logic as in health module
-    dbus_bus = getattr(dbus_manager, 'bus', None) if dbus_manager and HAS_DBUS else None
-
     # Currently, we directly use the fallback for simplicity.
     # If DBus path is added later, it would go here.
     # if dbus_bus:
@@ -217,7 +213,6 @@ def _fetch_all_dependencies_fallback() -> Tuple[Optional[Dict[str, Dict[str, Lis
     log_graph.info("Fetching all dependencies via 'systemctl list-dependencies --all'...")
     # REMOVED --plain flag to get the richer tree output
     command = ["systemctl", "list-dependencies", "--all", "--no-legend", "--no-pager"]
-    env_vars = {'LANG': 'C', 'LC_ALL': 'C'}
     success, stdout, stderr = run_subprocess(command)
 
     if not success:
@@ -274,7 +269,6 @@ def _fetch_all_dependencies_fallback() -> Tuple[Optional[Dict[str, Dict[str, Lis
 
             # Assume 'Requires' type for simplicity from this output format
             dep_type = "Requires" # Default assumption
-            # FIX: Strip any remaining leading tree chars from the unit name itself
             unit_name = unit_name.lstrip(TREE_CHARS + ' ')
 
             if not unit_name:
@@ -386,7 +380,6 @@ def analyze_full_dependency_graph() -> FullDependencyAnalysisResult:
          log.info("No dependencies found after fetching. Proceeding with empty graph.")
 
     # 2. Build Graph
-    # FIX: Ensure we handle the tuple return correctly
     graph, build_err = _build_dependency_graph(dep_data)
     if build_err:
         result.graph_build_error = build_err

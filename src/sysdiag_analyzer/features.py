@@ -84,11 +84,12 @@ def extract_features_from_report(report: Dict[str, Any]) -> List[Dict[str, Any]]
     resource_analysis = report.get("resource_analysis")
     if resource_analysis and isinstance(resource_analysis.get("unit_usage"), list):
         for unit_usage in resource_analysis["unit_usage"]:
-            if not isinstance(unit_usage, dict): continue
+            if not isinstance(unit_usage, dict):
+                continue
             unit_name = unit_usage.get("name")
-            if not unit_name: continue
+            if not unit_name:
+                continue
 
-            # DEBUG: Check if essential numeric fields are None
             cpu_val = unit_usage.get("cpu_usage_nsec")
             mem_val = unit_usage.get("memory_current_bytes")
             if cpu_val is None and mem_val is None and unit_usage.get("resource_error"):
@@ -117,9 +118,11 @@ def extract_features_from_report(report: Dict[str, Any]) -> List[Dict[str, Any]]
             unit_list = health_analysis.get(unit_list_key)
             if isinstance(unit_list, list):
                 for unit_health in unit_list:
-                     if not isinstance(unit_health, dict): continue
+                     if not isinstance(unit_health, dict):
+                        continue
                      unit_name = unit_health.get("name")
-                     if not unit_name: continue
+                     if not unit_name:
+                        continue
                      features.append({
                          "report_timestamp": report_ts,
                          "boot_id": unique_boot_id, # Use combined ID
@@ -137,12 +140,16 @@ def extract_features_from_report(report: Dict[str, Any]) -> List[Dict[str, Any]]
     boot_analysis = report.get("boot_analysis")
     if boot_analysis and isinstance(boot_analysis.get("blame"), list):
          for blame_item in boot_analysis["blame"]:
-             if not isinstance(blame_item, dict): continue
+             if not isinstance(blame_item, dict):
+                continue
              unit_name = blame_item.get("unit")
              time_str = blame_item.get("time")
-             if not unit_name or not time_str: continue
-             try: time_sec = float(time_str.rstrip('s'))
-             except ValueError: time_sec = None
+             if not unit_name or not time_str:
+                continue
+             try:
+                time_sec = float(time_str.rstrip('s'))
+             except ValueError:
+                time_sec = None
              features.append({
                   "report_timestamp": report_ts,
                   "boot_id": unique_boot_id, # Use combined ID
@@ -156,7 +163,8 @@ def extract_features_from_report(report: Dict[str, Any]) -> List[Dict[str, Any]]
         # How to associate log patterns with specific units? Needs more thought.
         # For now, maybe just extract system-wide pattern counts?
         for pattern in log_analysis["detected_patterns"]:
-             if not isinstance(pattern, dict): continue
+             if not isinstance(pattern, dict):
+                continue
              # This feature isn't tied to a specific unit, maybe use a placeholder unit name?
              # Or aggregate counts per report without unit association for ML?
              # features.append({
@@ -184,7 +192,6 @@ def extract_features(historical_reports: List[Dict[str, Any]]) -> List[Dict[str,
         else:
              log_feat.warning(f"Skipping non-dictionary item in historical_reports list: {type(report_dict)}")
 
-    # --- DEBUGGING: Print first few raw features ---
     if all_features:
         print("\n--- DEBUG: Sample of raw extracted features (first 20) ---")
         import pprint
@@ -192,8 +199,6 @@ def extract_features(historical_reports: List[Dict[str, Any]]) -> List[Dict[str,
         print("--- END DEBUG ---\n")
     else:
         print("\n--- DEBUG: No features were extracted from historical reports. ---\n")
-    # --- END DEBUGGING ---
-
 
     log_feat.info(f"Finished feature extraction. Total feature sets extracted: {len(all_features)}")
     return all_features

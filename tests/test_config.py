@@ -82,8 +82,10 @@ def mock_no_config_files(tmp_path):
     # Ensure parent dirs exist but files don't
     sys_config_path.parent.mkdir(parents=True, exist_ok=True)
     user_config_path.parent.mkdir(parents=True, exist_ok=True)
-    if sys_config_path.exists(): sys_config_path.unlink()
-    if user_config_path.exists(): user_config_path.unlink()
+    if sys_config_path.exists():
+        sys_config_path.unlink()
+    if user_config_path.exists():
+        user_config_path.unlink()
 
     with patch('sysdiag_analyzer.config.DEFAULT_CONFIG_FILES', [sys_config_path, user_config_path]), \
          patch('os.path.expanduser', lambda p: str(tmp_path / "home" / "user") if p == "~" else p):
@@ -158,7 +160,8 @@ directory = "/system/history"
 """
     sys_config_path.write_text(sys_config_content)
     # Ensure user config does NOT exist
-    if user_config_path.exists(): user_config_path.unlink()
+    if user_config_path.exists():
+        user_config_path.unlink()
     user_config_path.parent.mkdir(parents=True, exist_ok=True)
 
     with patch('sysdiag_analyzer.config.DEFAULT_CONFIG_FILES', [sys_config_path, user_config_path]), \
