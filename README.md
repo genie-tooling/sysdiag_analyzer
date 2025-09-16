@@ -1,6 +1,6 @@
-[![Python Package CI](https://github.com/systemd-smartfilter-architect/sysdiag-analyzer/actions/workflows/python-test.yml/badge.svg)](https://github.com/systemd-smartfilter-architect/sysdiag-analyzer/actions/workflows/python-test.yml)
+[![Python Package CI](https://github.com/genie-tooling/sysdiag_analyzer/actions/workflows/python-test.yml/badge.svg)](https://github.com/genie-tooling/sysdiag_analyzer/actions/workflows/python-test.yml)
 
-Systemd & System Health Diagnostic Tool. Version: 0.6.0 (Post-Phase 10)
+Systemd & System Health Diagnostic Tool
 
 This tool analyzes systemd units, boot performance, resource utilization,
 system logs, unit dependencies, historical trends, and process activity to provide
