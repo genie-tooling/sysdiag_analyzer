@@ -14,6 +14,10 @@ The LLM analysis and overall health check does tend to work as expected.
 
 ![Screenshot](screenshot/example.png)
 
+eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, python libraries but also works as expected.
+
+![Screenshot](screenshot/ebpf.png)
+
 **For exhaustive details on configuration, options, and interpretation, please see the `MAN.md` file.**
 
 ## Features
