@@ -41,7 +41,7 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         # Install the package with development extras (includes test deps and optionals)
-        pip install -e ".[dev]"
+        pip install -e ".[ml,llm,ebpf,dev]"
 
     - name: Run tests with pytest
       run: |
