@@ -490,8 +490,7 @@ def _scan_and_group_child_processes(
                             parent_unit=unit_name,
                             process_count=0,
                             pids=[],
-                            # MODIFIED: Initialize cpu_seconds and memory.
-                            aggregated_cpu_seconds=0.0,
+                            aggregated_cpu_seconds_total=0.0,
                             aggregated_memory_bytes=0,
                         )
                     group = groups[group_key]
@@ -499,12 +498,11 @@ def _scan_and_group_child_processes(
                     if len(group.pids) < 5:  # Store a few example PIDs
                         group.pids.append(child.pid)
 
-                    # MODIFIED: Aggregate cumulative CPU time in seconds.
                     if (
-                        group.aggregated_cpu_seconds is not None
+                        group.aggregated_cpu_seconds_total is not None
                         and cpu_times is not None
                     ):
-                        group.aggregated_cpu_seconds += (
+                        group.aggregated_cpu_seconds_total += (
                             cpu_times.user + cpu_times.system
                         )
 
@@ -540,8 +538,7 @@ def _scan_and_group_child_processes(
     filtered_groups = []
     for group in groups.values():
         mem_mb = (group.aggregated_memory_bytes or 0) / (1024 * 1024)
-        # MODIFIED: Use new cpu seconds threshold for filtering.
-        cpu_sec = group.aggregated_cpu_seconds or 0.0
+        cpu_sec = group.aggregated_cpu_seconds_total or 0.0
         if group.process_count > 0 and (
             mem_mb >= CHILD_PROCESS_MIN_MEM_MB
             or cpu_sec >= CHILD_PROCESS_MIN_CPU_SECONDS
@@ -552,9 +549,8 @@ def _scan_and_group_child_processes(
                 f"Filtering out group '{group.command_name}' under parent '{group.parent_unit}' (Count: {group.process_count}, CPU: {cpu_sec:.1f}s, Mem: {mem_mb:.1f}MB)"
             )
     # Sort and limit results
-    # MODIFIED: Sort by CPU seconds instead of percentage.
     filtered_groups.sort(
-        key=lambda g: (g.aggregated_cpu_seconds or 0.0, g.aggregated_memory_bytes or 0),
+        key=lambda g: (g.aggregated_cpu_seconds_total or 0.0, g.aggregated_memory_bytes or 0),
         reverse=True,
     )
     final_groups = filtered_groups[:CHILD_PROCESS_MAX_GROUPS]
@@ -829,3 +825,4 @@ def analyze_resources(
 
     log.info("Resource analysis finished.")
     return result
+    

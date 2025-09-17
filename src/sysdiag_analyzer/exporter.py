@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 # Local imports
-from .datatypes import SystemReport, UnitHealthInfo
+from .datatypes import SystemReport, UnitHealthInfo, MLAnalysisResult
 from .modules import (
     health,
     resources,
@@ -22,6 +22,7 @@ from .modules.health import (
     _get_all_units_dbus,
     _get_all_units_json,
 )
+from .utils import deduplicate_device_units
 from dataclasses import asdict
 
 # Conditional import for prometheus_client
@@ -66,6 +67,10 @@ def _collect_data_for_metrics(
             all_units, fetch_error = _get_all_units_dbus(dbus_manager)
         if fetch_error or not all_units:
             all_units, fetch_error = _get_all_units_json()
+
+        if all_units:
+            all_units = deduplicate_device_units(all_units)
+
         if fetch_error:
             report.errors.append(f"Failed to refresh unit list: {fetch_error}")
 
@@ -89,12 +94,9 @@ def _collect_data_for_metrics(
 
         # 3. ML Analysis (if enabled/available)
         if ml_engine and ml_engine.HAS_ML_LIBS:
-            anomaly_models = ml_engine.load_models(
-                ml_engine.ANOMALY_MODEL_TYPE, model_dir
-            )
-            scalers = ml_engine.load_models(ml_engine.SCALER_MODEL_TYPE, model_dir)
-            if anomaly_models and scalers:
-                report.ml_analysis = ml_engine.MLAnalysisResult(
+            anomaly_models, scalers, thresholds = ml_engine.load_models(model_dir)
+            if anomaly_models and scalers and thresholds:
+                report.ml_analysis = MLAnalysisResult(
                     models_loaded_count=len(anomaly_models)
                 )
                 current_features_list = extract_features_from_report(asdict(report))
@@ -105,11 +107,13 @@ def _collect_data_for_metrics(
                     )
                     engineered_df = ml_engine.engineer_features(current_features_df)
                     if not engineered_df.empty:
-                        report.ml_analysis.anomalies_detected = ml_engine.detect_anomalies(
-                            engineered_df, anomaly_models, scalers
+                        report.ml_analysis.anomalies_detected = (
+                            ml_engine.detect_anomalies(
+                                engineered_df, anomaly_models, scalers, thresholds
+                            )
                         )
             else:
-                report.ml_analysis = ml_engine.MLAnalysisResult(
+                report.ml_analysis = MLAnalysisResult(
                     error="No trained models found."
                 )
 
@@ -233,8 +237,8 @@ class SysdiagCollector:
                 labels = [group.parent_unit, group.command_name]
                 if group.aggregated_memory_bytes is not None:
                     child_group_mem.add_metric(labels, group.aggregated_memory_bytes)
-                if group.aggregated_cpu_seconds is not None:
-                    child_group_cpu.add_metric(labels, group.aggregated_cpu_seconds)
+                if group.aggregated_cpu_seconds_total is not None:
+                    child_group_cpu.add_metric(labels, group.aggregated_cpu_seconds_total)
             if child_group_mem.samples:
                 yield child_group_mem
             if child_group_cpu.samples:
@@ -248,3 +252,4 @@ class SysdiagCollector:
                 )
             if log_patterns.samples:
                 yield log_patterns
+                

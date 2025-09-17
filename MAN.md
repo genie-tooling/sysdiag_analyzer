@@ -4,7 +4,7 @@ SYSDIAG-ANALYZER(1)
 
        sysdiag-analyzer - Systemd & System Health Diagnostic Tool
 
-**SYNOPSIS**
+**SYNOIS**
 
        **sysdiag-analyzer** \[*GLOBAL OPTIONS*] *COMMAND* \[*COMMAND OPTIONS*] \[*ARGUMENTS*...]
 
@@ -97,17 +97,22 @@ SYSDIAG-ANALYZER(1)
 
        **retrain-ml** \[*OPTIONS*]
               Load historical data from the configured history directory and
-              retrain the Machine Learning anomaly detection models (Isolation
-              Forest per unit). Saves the trained models and scalers to the
-              configured models directory. Requires root privileges if writing
-              to the default location (`/var/lib/sysdiag-analyzer/models`) and
-              ML dependencies (`sysdiag-analyzer[ml]` extra).
+              retrain the Machine Learning anomaly detection models (LSTM
+              Autoencoder per unit). Saves the trained models to the configured
+              models directory. By default, this command excludes device, slice,
+              and scope units to save memory. Requires root privileges if writing
+              to the default location and ML dependencies (`sysdiag-analyzer[ml]` extra).
 
               **OPTIONS for retrain-ml:**
 
               **-n, --num-reports** *INTEGER*
                      Number of recent history reports to load and use for
-                     training. (Default: 50)
+                     training. (Default: 300)
+
+              **--train-devices**
+                     Include device, slice, and scope units in ML training.
+                     **Warning:** This is highly memory-intensive and may fail on
+                     systems with less than 32GB of RAM.
 
        **show-history** \[*OPTIONS*]
               List metadata (filename, size, timestamp) for recently saved
@@ -145,8 +150,33 @@ SYSDIAG-ANALYZER(1)
                      this level. (Default: 4)
 
        **analyze-unit** *UNIT_NAME*
-              Perform a focused analysis on a specific systemd unit.
-              *Currently Not Implemented.*
+              Perform a focused analysis on a specific systemd unit. This
+              command gathers the unit's current status, properties, resource
+              utilization from its cgroup, lists its dependencies and their
+              states, and shows recent journal logs. It provides a comprehensive,
+              all-in-one view for troubleshooting a single unit.
+
+       
+       **exporter** \[*OPTIONS*]
+              Run a persistent Prometheus exporter to expose unique analysis
+              metrics. This command starts a web server and runs a targeted
+              analysis in the background at a regular interval to refresh the
+              data. It is designed to be scraped by a Prometheus server.
+              Requires the exporter dependencies (`sysdiag-analyzer[exporter]`).
+
+              **OPTIONS for exporter:**
+
+              **--host** *TEXT*
+                     The host address to bind the web server to.
+                     (Default: 0.0.0.0)
+
+              **--port** *INTEGER*
+                     The port to expose the metrics on.
+                     (Default: 9822)
+
+              **-i, --interval** *INTEGER*
+                     The interval, in seconds, between background data collection
+                     runs. (Default: 60)
 
 **CONFIGURATION FILE**
 
@@ -234,26 +264,20 @@ SYSDIAG-ANALYZER(1)
 
               **directory** = *STRING* (Path)
                      The absolute path to the directory where trained ML models
-                     (Isolation Forest models and data scalers) are stored. The
+                     (LSTM Autoencoders, scalers, metadata) are stored. The
                      `retrain-ml` command needs write permissions here. The `run
                      --analyze-ml` command needs read permissions.
                      Default: `"/var/lib/sysdiag-analyzer/models"`
 
-              **anomaly_contamination** = *FLOAT* | *"auto"*
-                     The expected proportion of outliers (anomalies) in the
-                     dataset, used by the Isolation Forest algorithm during
-                     training (`retrain-ml`). Can be set to `"auto"` (recommended)
-                     to let the algorithm estimate it, or a float between 0.0
-                     and 0.5.
-                     Default: `"auto"`
+              **lstm_timesteps** = *INTEGER*
+                     The number of historical data points to use in a sequence
+                     for the LSTM model. (Default: 5)
 
               **min_samples_train** = *INTEGER*
-                     The minimum number of historical data points (reports where
-                     the unit had relevant metrics) required for a specific unit
-                     before an anomaly detection model will be trained for it
-                     during `retrain-ml`. Units with fewer samples will be
-                     skipped.
-                     Default: `10`
+                     The minimum number of historical data points required for a
+                     specific unit before an anomaly detection model will be
+                     trained for it during `retrain-ml`. Units with fewer samples
+                     will be skipped. (Default: 10)
 
 **FILES**
 
@@ -287,8 +311,11 @@ SYSDIAG-ANALYZER(1)
        **Run analysis but don't save the report:**
               `sudo sysdiag-analyzer run --no-save`
 
-       **Retrain ML models using last 100 reports:**
-              `sudo sysdiag-analyzer retrain-ml --num-reports 100`
+       **Retrain ML models using last 300 reports (default):**
+              `sudo sysdiag-analyzer retrain-ml`
+
+       **Retrain ML models including all device units (high memory usage):**
+              `sudo sysdiag-analyzer retrain-ml --train-devices`
 
        **Show the 10 most recent history report metadata:**
               `sudo sysdiag-analyzer show-history -n 10`
@@ -302,6 +329,9 @@ SYSDIAG-ANALYZER(1)
        **Analyze resources and output as JSON:**
               `sudo sysdiag-analyzer analyze-resources -o json`
 
+       **Analyze a specific unit in detail:**
+              `sudo sysdiag-analyzer analyze-unit NetworkManager.service`
+
        **Automated Daily Run (Example Crontab Entry):**
               `0 3 * * * /path/to/venv/bin/sysdiag-analyzer run --config /etc/sysdiag-analyzer/config.toml`
               *(Adjust path and ensure necessary permissions)*
@@ -311,21 +341,36 @@ SYSDIAG-ANALYZER(1)
               files in `/etc/systemd/system/`. See systemd documentation for
               details.)*
 
+       **Run the Prometheus exporter on port 9822:**
+              `sudo sysdiag-analyzer exporter`
+
+       **Run the exporter on a different port with a 5-minute interval:**
+              `sudo sysdiag-analyzer exporter --port 9999 --interval 300`
+
 **INTERPRETING OUTPUT**
 
        **ML Anomaly Detection (`--analyze-ml`)**
-              *   **Anomaly Score:** Provided by the Isolation Forest model.
-                  Scores are relative; lower scores (typically negative, e.g.,
-                  below -0.1 or -0.15) indicate a higher likelihood that the
-                  unit's current metrics are anomalous compared to its own
-                  history. Scores near 0 or positive are generally considered
-                  normal. Thresholds may need tuning based on system behavior.
-              *   **Zero Variance Units:** During `retrain-ml`, units whose
-                  metrics showed no change across the training history will be
-                  skipped. This is often normal for stable units like targets,
-                  mounts, scopes, or services that were idle during the entire
-                  training period. The `run --analyze-ml` output may list these
-                  skipped units if configured.
+              The anomaly detection engine uses a deep learning model (specifically, an
+              LSTM Autoencoder) trained on the historical time-series data for each
+              individual systemd unit. This is fundamentally different from some
+              other algorithms where a lower score means a higher anomaly.
+
+              *   **Score is a "Reconstruction Error":** The model learns the normal,
+                  time-dependent patterns of a unit's metrics (CPU, memory, etc.),
+                  including its regular idle periods and predictable spikes. When new
+                  data is analyzed, the model attempts to reconstruct it based on what
+                  it learned is "normal". The score reported is the error in this
+                  reconstruction.
+              *   **Low Score (near 0) is NORMAL:** If a unit's current behavior
+                  perfectly matches its historical patterns, the model can reconstruct
+                  it with very little error, resulting in a score close to 0.
+              *   **High Score (> 0) is ANOMALOUS:** If the current behavior is
+                  abnormal (e.g., unexpected CPU spike, high memory usage), the
+                  model struggles to reconstruct it, resulting in a high error score.
+                  The higher the score, the more anomalous the behavior.
+              *   **Threshold:** A dynamic threshold is calculated for each unit during
+                  `retrain-ml`. An anomaly is officially flagged only when the current
+                  reconstruction error score exceeds this unit-specific threshold.
 
        **eBPF Process Tracing (`--enable-ebpf`)**
               *   Provides a snapshot of process `exec` (execution) and `exit`
@@ -348,9 +393,38 @@ SYSDIAG-ANALYZER(1)
                   `Command Name` running under the same `Parent Unit`.
               *   Helps attribute resource consumption of these workloads back to
                   the originating systemd service.
-              *   High `Aggr. CPU %` or `Aggr. Memory` for a group indicates
+              *   High `Aggr. CPU Time` or `Aggr. Memory` for a group indicates
                   significant resource usage by that specific application/container
                   type running under the parent service.
+
+**PROMETHEUS EXPORTER (`exporter` command)**
+
+       When run, the exporter exposes the following unique metrics on the
+       `/metrics` endpoint. These metrics are designed to complement standard
+       exporters like `node_exporter`.
+
+       *   **sysdiag_analyzer_unit_anomaly_score{unit="..."}**
+           A gauge representing the latest ML reconstruction error (anomaly score)
+           for a given unit. Higher scores are more anomalous.
+
+       *   **sysdiag_analyzer_unit_problem_status{unit="...", problem_type="..."}**
+           A gauge that is `1` if a unit has a specific issue. `problem_type`
+           can be `failed`, `flapping`, `problematic_socket`, or
+           `problematic_timer`. Useful for creating alerts.
+
+       *   **sysdiag_analyzer_dependency_cycles_detected**
+           A gauge for the total number of dependency cycles found.
+
+       *   **sysdiag_analyzer_child_process_group_memory_bytes{parent_unit="...", command_name="..."}**
+           A gauge showing the aggregated RSS memory usage of child processes
+           (e.g., containers) grouped by their command name and parent service.
+
+       *   **sysdiag_analyzer_child_process_group_cpu_seconds_total{parent_unit="...", command_name="..."}**
+           A counter for the cumulative CPU time used by a child process group.
+
+       *   **sysdiag_analyzer_log_patterns_detected_total{pattern_key="...", level="..."}**
+           A counter for specific problematic log patterns found, labeled by
+           the pattern key (e.g., `segfault`) and log level (e.g., `ERR`).
 
 **SECURITY CONSIDERATIONS**
 

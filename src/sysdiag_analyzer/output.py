@@ -6,7 +6,7 @@ import json
 import logging
 import psutil
 from dataclasses import asdict
-from typing import Any, List, Optional, Dict
+from typing import Any, List, Optional
 
 try:
     from pygments.util import ClassNotFound
@@ -591,7 +591,7 @@ def format_resource_report(
         table.add_column("Aggr. Memory", style="yellow", width=14, justify="right")
         table.add_column("Example PIDs", style="dim")
         for group in result.child_process_groups:
-            cpu_str = _format_seconds(group.aggregated_cpu_seconds)
+            cpu_str = _format_seconds(group.aggregated_cpu_seconds_total)
             mem_str = _format_bytes(group.aggregated_memory_bytes)
             pids_str = ", ".join(map(str, group.pids))
             if len(group.pids) < group.process_count:
@@ -1083,7 +1083,8 @@ def format_rich_single_unit_report(
 
     # --- Main Info Table ---
     main_table = Table.grid(expand=True, padding=(0, 2))
-    main_table.add_column(ratio=1); main_table.add_column(ratio=2)
+    main_table.add_column(ratio=1)
+    main_table.add_column(ratio=2)
 
     color = 'green' if unit.active_state == 'active' else 'red' if unit.active_state == 'failed' else 'yellow'
     state_text = f"[bold {color}]{unit.active_state or 'N/A'}[/bold {color}] ({unit.sub_state or 'N/A'})"
@@ -1105,7 +1106,8 @@ def format_rich_single_unit_report(
     if report.resource_usage:
         res = report.resource_usage
         res_table = Table.grid(expand=True, padding=(0, 2))
-        res_table.add_column(ratio=1); res_table.add_column(ratio=2)
+        res_table.add_column(ratio=1)
+        res_table.add_column(ratio=2)
         res_table.add_row("[bold]CPU Time:[/bold]", _format_nanoseconds(res.cpu_usage_nsec))
         res_table.add_row("[bold]Current Memory:[/bold]", _format_bytes(res.memory_current_bytes))
         res_table.add_row("[bold]Peak Memory:[/bold]", _format_bytes(res.memory_peak_bytes))

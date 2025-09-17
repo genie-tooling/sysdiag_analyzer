@@ -130,6 +130,6 @@ cython_debug/
 
 # Sysdiag specific
 /history/ # If history dir is within project (it shouldn't be by default)
-/models/  # ML Models (Phase 8) - Assuming within project for simplicity, adjust if needed
+/models/ 
 *.joblib  # Model files
 

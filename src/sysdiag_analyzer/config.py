@@ -32,7 +32,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "models": {
         "directory": "/var/lib/sysdiag-analyzer/models",
-        "anomaly_contamination": "auto",
+        "lstm_timesteps": 5,
         "min_samples_train": 10,
     },
 }

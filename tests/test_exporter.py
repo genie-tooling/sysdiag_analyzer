@@ -58,7 +58,7 @@ def mock_full_system_report():
     return SystemReport(
         hostname="test-host",
         ml_analysis=MLAnalysisResult(
-            anomalies_detected=[AnomalyInfo(unit_name="anomaly.service", score=-0.25)]
+            anomalies_detected=[AnomalyInfo(unit_name="anomaly.service", score=0.25)]
         ),
         health_analysis=HealthAnalysisResult(
             failed_units=[UnitHealthInfo(name="failed.service")],
@@ -81,7 +81,7 @@ def mock_full_system_report():
                     command_name="worker.py",
                     process_count=3,
                     aggregated_memory_bytes=100 * 1024 * 1024,
-                    aggregated_cpu_seconds=123.45,
+                    aggregated_cpu_seconds_total=123.45,
                 )
             ],
         ),
@@ -159,7 +159,7 @@ def test_collector_collect_with_full_report(mock_config, mock_full_system_report
     assert len(anomaly_metric.samples) == 1
     sample = anomaly_metric.samples[0]
     assert sample.labels == {"unit": "anomaly.service"}
-    assert sample.value == -0.25
+    assert sample.value == 0.25
 
     # --- Verify Unit Problem Status ---
     health_metric = metrics_by_name["sysdiag_analyzer_unit_problem_status"]
@@ -241,7 +241,7 @@ def test_collector_collect_with_no_cached_report(mock_config):
 @patch("sysdiag_analyzer.exporter.resources.analyze_resources")
 @patch("sysdiag_analyzer.exporter.logs.analyze_general_logs")
 @patch("sysdiag_analyzer.exporter.dependencies.analyze_full_dependency_graph")
-@patch("sysdiag_analyzer.exporter.ml_engine.load_models", return_value=({}, {}))
+@patch("sysdiag_analyzer.exporter.ml_engine.load_models", return_value=({}, {}, {}))
 @patch("sysdiag_analyzer.exporter._get_all_units_dbus")
 def test_collect_data_for_metrics_integration(
     mock_get_units,
@@ -272,10 +272,11 @@ def test_collect_data_for_metrics_integration(
     mock_analyze_resources.assert_called_once()
     mock_analyze_logs.assert_called_once()
     mock_analyze_deps.assert_called_once()
-    mock_load_models.assert_called()  # Called for both model types
+    mock_load_models.assert_called_once()
 
     # Verify that the report was populated
     assert report is not None
     assert report.health_analysis is not None
     assert len(report.health_analysis.failed_units) == 1
     assert report.errors == []
+

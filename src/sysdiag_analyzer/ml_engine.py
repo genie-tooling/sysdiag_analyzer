@@ -1,471 +1,525 @@
 # src/sysdiag_analyzer/ml_engine.py
 from __future__ import annotations
 
+import json
 import logging
-import re # Import re for filename sanitization consistency
+import re
+import gc  # Import the garbage collector module
+import collections
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple, Set
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
+# --- Suppress TensorFlow and Keras Verbose Logging ---
+# Set TF log level via environment variable to hide C++ level messages
+import os
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # 0=all, 1=info, 2=warning, 3=error
+
+# Set Python logging level for TensorFlow to hide Python-level warnings like retracing
+logging.getLogger("tensorflow").setLevel(logging.ERROR)
+
 
 # Conditional imports for ML libraries
 try:
-    import numpy as np # Import numpy for variance check
+    import numpy as np
     import pandas as pd
-    from sklearn.ensemble import IsolationForest
     from sklearn.preprocessing import MinMaxScaler
     import joblib
+
+    import tensorflow as tf
+    from tensorflow import keras
+
     HAS_ML_LIBS = True
-    DataFrame = pd.DataFrame # Define DataFrame alias
+    DataFrame = pd.DataFrame  # Define DataFrame alias
 except ImportError:
     HAS_ML_LIBS = False
-    np = None # type: ignore
-    pd = None # type: ignore
-    IsolationForest = None # type: ignore
-    # Define dummy scaler if import fails
-    MinMaxScaler = None # type: ignore
-    joblib = None # type: ignore
+    np = None
+    pd = None
+    MinMaxScaler = None
+    joblib = None
+    tf = None
+    keras = None
     DataFrame = Any
+
+# Define logger early
+log_ml = logging.getLogger(__name__)
 
 # Local imports
 try:
     from . import features
-    from .datatypes import MLAnalysisResult, AnomalyInfo
+except ImportError as e:
+    features = None
+    log_ml.error(
+        f"Failed to import 'features' module, ML features will be limited. Error: {e}"
+    )
+
+try:
+    from .datatypes import AnomalyInfo, MLAnalysisResult
 except ImportError:
-    features = None # type: ignore
-    MLAnalysisResult = Any # type: ignore
-    AnomalyInfo = Any # type: ignore
+    AnomalyInfo = Any
+    MLAnalysisResult = Any
 
 
-log_ml = logging.getLogger(__name__)
-
-# --- Configuration (Defaults, can be overridden by main using APP_CONFIG) ---
-ANOMALY_MODEL_TYPE = "anomaly_isolationforest"
-SCALER_MODEL_TYPE = "scaler_minmax"
+# --- Configuration (Defaults, can be overridden by main) ---
 MIN_SAMPLES_FOR_TRAINING = 10
-DEFAULT_ISOLATION_FOREST_CONTAMINATION = 'auto'
-# DEBUGGING: Limit raw features to print
-DEBUG_RAW_FEATURE_LIMIT = 20
+LSTM_TIMESTEPS = 5
+# A sensible minimum threshold to prevent 0.0 thresholds for stable units
+MINIMUM_THRESHOLD = 0.01
+
 
 # --- Helper Functions ---
-
 def _check_ml_dependencies():
     """Checks if required ML libraries are installed."""
     if not HAS_ML_LIBS:
-        msg = "ML libraries (pandas, scikit-learn, joblib, numpy) are not installed. ML features unavailable. Install with 'pip install sysdiag-analyzer[ml]'"
-        log_ml.error(msg)
-        raise ImportError(msg)
-    if MinMaxScaler is None:
-        msg = "MinMaxScaler could not be imported from scikit-learn. ML features unavailable."
+        msg = "ML libraries (pandas, scikit-learn, tensorflow, joblib) are not installed. ML features unavailable. Install with 'pip install sysdiag-analyzer[ml]'"
         log_ml.error(msg)
         raise ImportError(msg)
 
 
 def _sanitize_filename(name: str) -> str:
     """Creates a filesystem-safe filename from a unit name."""
-    # Keep alphanumeric, underscore, hyphen. Replace others with underscore.
-    # Replace common problematic chars like '.', '/', ':'
-    name = name.replace('.', '_dot_') # Avoid ambiguity with file extensions
-    name = name.replace('/', '_slash_')
-    name = name.replace(':', '_colon_')
-    # Replace any remaining non-safe characters
-    safe_name = re.sub(r'[^\w-]', '_', name)
-    # Avoid names starting with '-' or '_' if possible, prepend 'unit_' if so
-    if safe_name.startswith(('-', '_')):
-        safe_name = 'unit_' + safe_name
+    name = name.replace(".", "_dot_")
+    name = name.replace("/", "_slash_")
+    name = name.replace(":", "_colon_")
+    safe_name = re.sub(r"[^\w-]", "_", name)
+    if safe_name.startswith(("-", "_")):
+        safe_name = "unit_" + safe_name
     return safe_name
 
 
-# --- Model Persistence ---
-
-def save_models(models: Dict[str, Any], model_type: str, model_storage_path: Path):
-    """Saves trained models (or scalers) to disk using joblib."""
+# --- Model and Data Persistence ---
+def save_model_artifacts(
+    model: Any,
+    scaler: Any,
+    threshold: float,
+    unit_name: str,
+    model_storage_path: Path,
+):
+    """Saves all artifacts for a single unit to a dedicated directory."""
     _check_ml_dependencies()
-    if not models:
-        log_ml.warning(f"No models provided to save for type '{model_type}'.")
-        return
+    safe_name = _sanitize_filename(unit_name)
+    unit_model_dir = model_storage_path / safe_name
+    unit_model_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
 
-    specific_model_path = model_storage_path / model_type
     try:
-        specific_model_path.mkdir(parents=True, exist_ok=True, mode=0o700)
-        log_ml.info(f"Ensured model directory exists: {specific_model_path}")
-    except PermissionError:
-        log_ml.error(f"Permission denied creating model directory: {specific_model_path}")
-        raise
+        # Save Keras model to a single .keras file (Keras 3 standard)
+        model.save(unit_model_dir / "model.keras")
+        # Save scaler
+        joblib.dump(scaler, unit_model_dir / "scaler.joblib")
+        # Save threshold and other metadata
+        with open(unit_model_dir / "metadata.json", "w") as f:
+            json.dump({"threshold": threshold}, f)
+        log_ml.debug(f"Saved all artifacts for '{unit_name}'.")
     except Exception as e:
-        log_ml.error(f"Error creating model directory {specific_model_path}: {e}")
-        raise
-
-    saved_count = 0
-    error_count = 0
-    # The keys in the 'models' dict are the ORIGINAL unit names
-    for unit_name, model_obj in models.items():
-        # Sanitize the original unit name ONLY for the filename
-        safe_filename_stem = _sanitize_filename(unit_name)
-        safe_filename = safe_filename_stem + ".joblib"
-        filepath = specific_model_path / safe_filename
-        try:
-            joblib.dump(model_obj, filepath)
-            saved_count += 1
-            log_ml.debug(f"Saved model for '{unit_name}' (as {safe_filename})")
-        except Exception as e:
-            log_ml.error(f"Failed to save model for unit '{unit_name}' to {filepath}: {e}", exc_info=True)
-            error_count += 1
-
-    log_ml.info(f"Finished saving models for type '{model_type}'. Saved: {saved_count}, Errors: {error_count}")
-    if error_count > 0:
-        pass # Consider raising an exception or returning status
+        log_ml.error(
+            f"Failed to save artifacts for unit '{unit_name}': {e}", exc_info=True
+        )
 
 
-def load_models(model_type: str, model_storage_path: Path) -> Dict[str, Any]:
+def load_models(
+    model_storage_path: Path, active_units: Optional[Set[str]] = None
+) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, float]]:
     """
-    Loads models (or scalers) of a specific type from disk.
-    The returned dictionary is keyed by the SANITIZED unit name (filename stem).
+    Loads model artifacts, optionally filtering for a specific set of active units.
     """
     _check_ml_dependencies()
-    models = {}
-    specific_model_path = model_storage_path / model_type
-    log_ml.info(f"Attempting to load models of type '{model_type}' from {specific_model_path}...")
+    models, scalers, thresholds = {}, {}, {}
+    if not model_storage_path.is_dir():
+        log_ml.warning(
+            f"Model directory not found: {model_storage_path}. No models loaded."
+        )
+        return models, scalers, thresholds
 
-    if not specific_model_path.is_dir():
-        log_ml.warning(f"Model directory not found: {specific_model_path}. No models loaded.")
-        return models
+    sanitized_active_units = (
+        {_sanitize_filename(name) for name in active_units} if active_units else None
+    )
 
-    loaded_count = 0
-    error_count = 0
-    for filepath in specific_model_path.glob("*.joblib"):
-        try:
-            model_obj = joblib.load(filepath)
-            # Use the filename stem (sanitized name) as the key
-            sanitized_key = filepath.stem
-            models[sanitized_key] = model_obj
-            loaded_count += 1
-            log_ml.debug(f"Loaded model with key '{sanitized_key}' from {filepath}")
-        except Exception as e:
-            log_ml.error(f"Failed to load model from {filepath}: {e}", exc_info=True)
-            error_count += 1
+    log_ml.info(
+        f"Scanning model directory {model_storage_path}..."
+        f"{' Filtering for active units.' if sanitized_active_units else ''}"
+    )
 
-    log_ml.info(f"Finished loading models for type '{model_type}'. Loaded: {loaded_count}, Errors: {error_count}")
-    return models
+    for unit_dir in model_storage_path.iterdir():
+        if unit_dir.is_dir():
+            sanitized_key = unit_dir.name
+            if sanitized_active_units and sanitized_key not in sanitized_active_units:
+                log_ml.debug(f"Skipping model load for inactive/unknown unit: {sanitized_key}")
+                continue
+
+            model_path = unit_dir / "model.keras"
+            scaler_path = unit_dir / "scaler.joblib"
+            metadata_path = unit_dir / "metadata.json"
+
+            if (
+                model_path.is_file()
+                and scaler_path.is_file()
+                and metadata_path.is_file()
+            ):
+                try:
+                    models[sanitized_key] = keras.models.load_model(model_path)
+                    scalers[sanitized_key] = joblib.load(scaler_path)
+                    with open(metadata_path, "r") as f:
+                        metadata = json.load(f)
+                        thresholds[sanitized_key] = metadata["threshold"]
+                    log_ml.debug(f"Loaded artifacts for key '{sanitized_key}'.")
+                except Exception as e:
+                    log_ml.error(
+                        f"Failed to load artifacts for key '{sanitized_key}': {e}",
+                        exc_info=True,
+                    )
+    log_ml.info(
+        f"Finished loading. Found {len(models)} models, {len(scalers)} scalers, and {len(thresholds)} thresholds."
+    )
+    return models, scalers, thresholds
+
 
 # --- Data Preparation and Feature Engineering ---
-
-def load_and_prepare_data(history_dir: Path, num_reports: int = 50) -> Optional[DataFrame]:
-    """Loads historical data, extracts features, and prepares a DataFrame."""
+def load_and_prepare_data(
+    history_dir: Path, num_reports: int = 50, include_devices: bool = False
+) -> Optional[DataFrame]:
+    """Loads historical data and prepares it into a DataFrame."""
     _check_ml_dependencies()
-    if not features:
-        log_ml.error("Feature extraction module not available.")
+    if features is None:
+        log_ml.error("Feature extraction module is not available.")
         return None
 
-    log_ml.info(f"Loading historical data for ML from {history_dir} (last {num_reports} reports)...")
-    historical_reports = features.load_historical_data(history_dir=history_dir, num_reports=num_reports)
+    log_ml.info(f"Loading last {num_reports} historical reports...")
+    historical_reports = features.load_historical_data(
+        history_dir=history_dir, num_reports=num_reports
+    )
     if not historical_reports:
-        log_ml.warning("No historical reports found or loaded. Cannot prepare ML data.")
+        log_ml.warning("No historical reports found for training.")
         return None
 
-    log_ml.info("Extracting features from historical reports...")
-    flat_features = features.extract_features(historical_reports)
-    if not flat_features:
+    features_list = features.extract_features(
+        historical_reports, include_devices=include_devices
+    )
+    if not features_list:
         log_ml.warning("No features extracted from historical reports.")
         return None
 
-    # --- DEBUGGING: Print sample of raw features removed for brevity ---
+    df = pd.DataFrame(features_list)
+    df["report_timestamp"] = pd.to_datetime(df["report_timestamp"], errors="coerce")
+    df = df.dropna(subset=["report_timestamp"])
 
-    log_ml.info("Converting features to DataFrame...")
-    try:
-        if pd is None:
-            _check_ml_dependencies()
-        df = pd.DataFrame(flat_features)
-
-        # --- DEBUGGING: Check columns right after DataFrame creation removed ---
-
-        if 'report_timestamp' not in df.columns:
-             log_ml.error("DataFrame missing 'report_timestamp' column.")
-             return None
-        df['report_timestamp'] = pd.to_datetime(df['report_timestamp'], errors='coerce')
-        df = df.dropna(subset=['report_timestamp'])
-
-        # Convert boolean flags (ensure they exist before conversion)
-        bool_cols = ['is_failed', 'is_flapping', 'is_problematic_socket', 'is_problematic_timer']
-        for col in bool_cols:
-             if col in df.columns:
-                  # Convert to float first to handle potential non-boolean values, then bool
-                  df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(bool)
-             else:
-                  # Add missing boolean columns if needed
-                  log_ml.debug(f"Adding missing boolean column '{col}' with False during prepare.")
-                  df[col] = False
-
-
-        # Convert numeric columns (ensure they exist)
-        numeric_cols = [
-            'cpu_usage_nsec', 'mem_current_bytes', 'mem_peak_bytes',
-            'io_read_bytes', 'io_write_bytes', 'tasks_current',
-            'n_restarts', 'boot_blame_sec'
-        ]
-        for col in numeric_cols:
-             if col in df.columns:
-                  df[col] = pd.to_numeric(df[col], errors='coerce') # NaNs will be handled later by engineer_features
-             else:
-                  # Add missing numeric columns if needed
-                  log_ml.debug(f"Adding missing numeric column '{col}' with NaN during prepare.")
-                  df[col] = np.nan # Add as NaN initially
-
-
-        # Aggregate features: Group by unit and timestamp, taking the first value
-        # This combines resource/health/boot features for the same unit at the same time
-        # We should ideally do this *before* type conversion? No, do it after.
-        # Define aggregation rules
-        agg_rules = {}
-        columns_to_agg = df.columns.difference(['unit_name', 'report_timestamp'])
-        for col in columns_to_agg:
-             # Use 'first' as a simple strategy. Could use mean, max etc. if needed
-             agg_rules[col] = 'first'
-
-        # Check if unit_name column exists before grouping
-        if 'unit_name' in df.columns:
-            df_agg = df.groupby(['unit_name', 'report_timestamp'], as_index=False, sort=False).agg(agg_rules)
+    agg_rules: Dict[str, Any] = {}
+    numeric_cols = [
+        "cpu_usage_nsec",
+        "mem_current_bytes",
+        "mem_peak_bytes",
+        "io_read_bytes",
+        "io_write_bytes",
+        "tasks_current",
+        "n_restarts",
+        "boot_blame_sec",
+    ]
+    bool_cols = [
+        "is_failed",
+        "is_flapping",
+        "is_problematic_socket",
+        "is_problematic_timer",
+    ]
+    for col in df.columns:
+        if col in ["unit_name", "report_timestamp"]:
+            continue
+        elif col in numeric_cols:
+            agg_rules[col] = "mean"
+        elif col in bool_cols:
+            agg_rules[col] = "max"
         else:
-            log_ml.error("DataFrame missing 'unit_name' column before aggregation.")
-            return None
+            agg_rules[col] = "first"
 
-        df_agg = df_agg.sort_values(by=['unit_name', 'report_timestamp'])
-        log_ml.info(f"Prepared DataFrame after aggregation with shape {df_agg.shape} and columns: {df_agg.columns.tolist()}")
-        return df_agg
+    df_agg = df.groupby(["unit_name", "report_timestamp"], as_index=False).agg(
+        agg_rules
+    )
+    df_agg = df_agg.sort_values(by=["unit_name", "report_timestamp"])
 
-    except Exception as e:
-        log_ml.error(f"Error creating or preparing DataFrame: {e}", exc_info=True)
-        return None
+    log_ml.info(f"Data prepared. Shape: {df_agg.shape}")
+    return df_agg
+
+
+def _create_sequences(data: np.ndarray, timesteps: int) -> np.ndarray:
+    """Converts a 2D array of features into 3D sequences."""
+    X = []
+    for i in range(len(data) - timesteps + 1):
+        X.append(data[i : (i + timesteps)])
+    return np.array(X)
 
 
 def engineer_features(df: DataFrame) -> DataFrame:
-    """
-    Performs feature engineering. Fills NaNs in numeric columns.
-    """
+    """Performs feature engineering. Fills NaNs and ensures correct types."""
     _check_ml_dependencies()
     if df is None or df.empty:
         log_ml.warning("Cannot engineer features: Input DataFrame is empty or None.")
-        return pd.DataFrame() if pd else None
+        return pd.DataFrame()
 
-    log_ml.info("Performing feature engineering (No lag/diff)...")
-    # Basic features to ensure correct types and fill NaNs
-    metrics_to_check = [
-        'cpu_usage_nsec', 'mem_current_bytes', 'mem_peak_bytes', # Added peak mem
-        'io_read_bytes', 'io_write_bytes', 'tasks_current'
-    ]
-    health_flags = ['is_failed', 'is_flapping']
+    log_ml.info("Performing feature engineering...")
     df_out = df.copy()
 
-    # Ensure numeric types and fill NaNs for core metrics
-    for col in metrics_to_check:
-        if col in df_out.columns:
-            # Fill NaNs with 0 *before* checking type
-            df_out[col] = pd.to_numeric(df_out[col], errors='coerce').fillna(0)
-        else:
-             log_ml.debug(f"Adding missing numeric feature column '{col}' with 0s during engineering.")
-             df_out[col] = 0 # Add column if missing, filled with 0
+    numeric_features = [
+        "cpu_usage_nsec",
+        "mem_current_bytes",
+        "mem_peak_bytes",
+        "io_read_bytes",
+        "io_write_bytes",
+        "tasks_current",
+    ]
+    bool_features = ["is_failed", "is_flapping"]
 
-    # Ensure boolean types for health flags
-    for col in health_flags:
-         if col in df_out.columns:
-              # Fill NaNs with 0 *before* converting to bool
-              df_out[col] = pd.to_numeric(df_out[col], errors='coerce').fillna(0).astype(bool)
-         else:
-              log_ml.debug(f"Adding missing boolean feature column '{col}' with False during engineering.")
-              df_out[col] = False # Add column if missing, filled with False
+    for col in numeric_features:
+        if col in df_out.columns:
+            df_out[col] = pd.to_numeric(df_out[col], errors="coerce").fillna(0)
+        else:
+            df_out[col] = 0
+
+    for col in bool_features:
+        if col in df_out.columns:
+            df_out[col] = (
+                pd.to_numeric(df_out[col], errors="coerce").fillna(0).astype(bool)
+            )
+        else:
+            df_out[col] = False
 
     log_ml.info(f"Finished feature engineering. DataFrame shape: {df_out.shape}")
     return df_out
 
-# --- Anomaly Detection ---
+
+# --- LSTM Autoencoder Anomaly Detection ---
+def _build_lstm_autoencoder(timesteps: int, n_features: int) -> keras.Model:
+    """Builds the Keras LSTM Autoencoder model using the functional API."""
+    inputs = keras.Input(shape=(timesteps, n_features))
+    encoded = keras.layers.LSTM(64, activation="relu", return_sequences=True)(inputs)
+    encoded = keras.layers.LSTM(32, activation="relu", return_sequences=False)(encoded)
+    encoded = keras.layers.RepeatVector(timesteps)(encoded)
+    decoded = keras.layers.LSTM(32, activation="relu", return_sequences=True)(encoded)
+    decoded = keras.layers.LSTM(64, activation="relu", return_sequences=True)(decoded)
+    outputs = keras.layers.TimeDistributed(keras.layers.Dense(n_features))(decoded)
+    model = keras.Model(inputs, outputs)
+    model.compile(optimizer="adam", loss="mae")
+    return model
+
+
+def _train_single_unit_model(
+    unit_name: str, unit_df: DataFrame, model_dir_path: Path
+) -> Tuple[str, bool, Optional[str]]:
+    """
+    Worker function to train a model for a single unit. This is executed in a
+    separate process.
+    """
+    # Force TensorFlow to use CPU only (system RAM) within this worker process.
+    # This prevents CUDA out-of-memory errors on systems with limited VRAM.
+    os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+    # Ensure dependencies are checked inside the worker
+    _check_ml_dependencies()
+
+    log_ml.info(f"Worker[{os.getpid()}]: Starting training for '{unit_name}'.")
+
+    try:
+        numeric_features = [
+            "cpu_usage_nsec",
+            "mem_current_bytes",
+            "mem_peak_bytes",
+            "io_read_bytes",
+            "io_write_bytes",
+            "tasks_current",
+            "is_failed",
+            "is_flapping",
+        ]
+        training_features = [f for f in numeric_features if f in unit_df.columns]
+        n_features = len(training_features)
+        if n_features == 0:
+            return unit_name, False, "No numeric features found."
+
+        unit_features_df = unit_df[training_features].copy()
+        unit_features_df[["is_failed", "is_flapping"]] = unit_features_df[
+            ["is_failed", "is_flapping"]
+        ].astype(int)
+
+        if unit_features_df.var().sum() == 0:
+            return unit_name, False, "Zero variance in feature data."
+
+        scaler = MinMaxScaler()
+        scaler.feature_names_in_ = training_features
+        scaled_data = scaler.fit_transform(unit_features_df)
+
+        X_train = _create_sequences(scaled_data, LSTM_TIMESTEPS)
+        if X_train.shape[0] == 0:
+            return unit_name, False, "Not enough data to form a single sequence."
+
+        model = _build_lstm_autoencoder(LSTM_TIMESTEPS, n_features)
+        model.fit(
+            X_train,
+            X_train,
+            epochs=20,
+            batch_size=32,
+            verbose=0,
+            callbacks=[
+                keras.callbacks.EarlyStopping(monitor="loss", patience=3, verbose=0)
+            ],
+        )
+
+        train_pred = model.predict(X_train, batch_size=32, verbose=0)
+        train_mae_loss = np.mean(np.abs(train_pred - X_train), axis=1).flatten()
+
+        calculated_threshold = np.percentile(train_mae_loss, 95) * 1.5
+        threshold = max(calculated_threshold, MINIMUM_THRESHOLD)
+
+        log_ml.info(
+            f"Worker[{os.getpid()}]: Trained model for '{unit_name}'. Anomaly threshold set to {threshold:.6f}."
+        )
+        save_model_artifacts(model, scaler, threshold, unit_name, model_dir_path)
+
+        return unit_name, True, None
+    except Exception as e:
+        log_ml.error(
+            f"Worker[{os.getpid()}]: Exception during training for '{unit_name}': {e}",
+            exc_info=True,
+        )
+        return unit_name, False, str(e)
+    finally:
+        # ** CRITICAL MEMORY RELEASE STEP **
+        keras.backend.clear_session()
+        gc.collect()
+
 
 def train_anomaly_models(
-    features_df: DataFrame,
-    model_dir_path: Path
-) -> Tuple[Dict[str, IsolationForest], Dict[str, MinMaxScaler], List[str]]: # Changed Scaler Type
+    engineered_df: DataFrame, model_dir_path: Path, max_workers: int = 1
+) -> Tuple[int, Dict[str, List[str]]]:
     """
-    Trains per-unit Isolation Forest models and MinMaxScaler scalers.
-    Returns trained models, scalers, and a list of units skipped.
-    DEBUG 3: Removed full describe, rely on raw feature print earlier.
+    Trains per-unit LSTM Autoencoder models in parallel using a process pool.
     """
     _check_ml_dependencies()
-    models: Dict[str, IsolationForest] = {}
-    scalers: Dict[str, MinMaxScaler] = {} # Changed Scaler Type
-    skipped_units: List[str] = []
-
-    if features_df is None or features_df.empty:
-        log_ml.warning("Cannot train anomaly models: Feature DataFrame is empty.")
-        return models, scalers, skipped_units
-
-    numeric_features = [
-        'cpu_usage_nsec', 'mem_current_bytes', 'mem_peak_bytes', # Added peak
-        'io_read_bytes', 'io_write_bytes', 'tasks_current',
-        # Include boolean flags converted to numeric (0/1) for training
-        'is_failed', 'is_flapping'
-    ]
-    # Ensure only features actually present in the DataFrame are used
-    training_features = [f for f in numeric_features if f in features_df.columns]
-
-    if not training_features:
-        log_ml.error("No suitable base features found in the DataFrame for training.")
-        return models, scalers, skipped_units
-
-    log_ml.info(f"Starting anomaly model training for {features_df['unit_name'].nunique()} units using features: {training_features}")
     trained_count = 0
-    skipped_insufficient_data = 0
-    skipped_zero_variance = 0
+    skipped_summary: Dict[str, List[str]] = collections.defaultdict(list)
 
-    # --- REMOVED DEBUGGING 2 ---
+    log_ml.info("Grouping data by unit for parallel training...")
+    grouped_df = engineered_df.groupby("unit_name")
+    tasks_to_submit = [
+        (name, group)
+        for name, group in grouped_df
+        if len(group) >= MIN_SAMPLES_FOR_TRAINING
+    ]
 
-    for unit_name, unit_data in features_df.groupby('unit_name'):
-        log_ml.debug(f"Processing unit: {unit_name} (Data points: {len(unit_data)})")
-        # Select only the training features
-        unit_features_df = unit_data[training_features].copy()
+    # Identify units that are skipped upfront due to insufficient samples
+    all_units = set(engineered_df["unit_name"].unique())
+    units_to_train = {name for name, group in tasks_to_submit}
+    upfront_skipped_units = list(all_units - units_to_train)
+    if upfront_skipped_units:
+        reason_key = f"Insufficient data (< {MIN_SAMPLES_FOR_TRAINING} samples)"
+        skipped_summary[reason_key].extend(upfront_skipped_units)
+        log_ml.info(
+            f"Skipping {len(upfront_skipped_units)} units upfront due to insufficient data."
+        )
 
-        # Convert boolean columns to int (0/1) before scaling
-        for col in ['is_failed', 'is_flapping']:
-            if col in unit_features_df.columns:
-                unit_features_df[col] = unit_features_df[col].astype(int)
+    if max_workers > 1:
+        log_ml.info(
+            f"Submitting {len(tasks_to_submit)} training tasks to {max_workers} worker processes..."
+        )
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(
+                    _train_single_unit_model, name, group_df, model_dir_path
+                ): name
+                for name, group_df in tasks_to_submit
+            }
 
-        # Fill NaNs *before* scaling during training
-        # This should have been done in engineer_features, but do it again just in case
-        unit_features_df = unit_features_df.fillna(0)
+            for future in as_completed(futures):
+                unit_name = futures[future]
+                try:
+                    _, was_trained, reason = future.result()
+                    if was_trained:
+                        trained_count += 1
+                    else:
+                        reason_str = reason or "Unknown reason"
+                        skipped_summary[reason_str].append(unit_name)
+                        log_ml.info(
+                            f"Skipping '{unit_name}' post-training: {reason_str}"
+                        )
+                except Exception as e:
+                    log_ml.error(
+                        f"Training failed for unit '{unit_name}' with an exception in the worker: {e}",
+                        exc_info=True,
+                    )
+                    skipped_summary["Worker process exception"].append(unit_name)
+    else:
+        log_ml.info(
+            f"Running {len(tasks_to_submit)} training tasks serially in the main process..."
+        )
+        for name, group_df in tasks_to_submit:
+            try:
+                _, was_trained, reason = _train_single_unit_model(
+                    name, group_df, model_dir_path
+                )
+                if was_trained:
+                    trained_count += 1
+                else:
+                    reason_str = reason or "Unknown reason"
+                    skipped_summary[reason_str].append(name)
+                    log_ml.info(f"Skipping '{name}' post-training: {reason_str}")
+            except Exception as e:
+                log_ml.error(
+                    f"Training failed for unit '{name}' with an exception: {e}",
+                    exc_info=True,
+                )
+                skipped_summary["Serial execution exception"].append(name)
 
-        if len(unit_features_df) < MIN_SAMPLES_FOR_TRAINING:
-            log_ml.info(f"Skipping training for unit '{unit_name}': Insufficient data ({len(unit_features_df)} < {MIN_SAMPLES_FOR_TRAINING}).")
-            skipped_insufficient_data += 1
-            continue
+    total_skipped = sum(len(units) for units in skipped_summary.values())
+    log_ml.info(
+        f"Training complete. Trained: {trained_count}, Skipped: {total_skipped}"
+    )
+    return trained_count, dict(skipped_summary)
 
-        try:
-            # Check for zero variance *before* scaling (more informative)
-            # Use np.ptp (peak-to-peak) which is max - min
-            # Ensure we handle potential all-NaN columns if fillna didn't catch them
-            if np and np.all(np.ptp(np.nan_to_num(unit_features_df.values), axis=0) == 0):
-                 log_ml.info(f"Skipping training for unit '{unit_name}': All features have zero variance (unit likely stable/inactive).")
-                 skipped_zero_variance += 1
-                 skipped_units.append(unit_name)
-                 continue
-
-            scaler = MinMaxScaler()
-            # Fit scaler on the (potentially NaN-filled) data
-            scaled_features_np = scaler.fit_transform(unit_features_df)
-
-            # Store feature names AFTER fitting
-            # Use .columns directly as it's guaranteed to exist and be correct here
-            scaler.feature_names_in_ = list(unit_features_df.columns) # Store the columns used
-            log_ml.debug(f"Scaler for {unit_name} trained with features: {scaler.feature_names_in_}")
-
-            # Use original unit_name as the key for the dictionaries
-            scalers[unit_name] = scaler
-
-            model = IsolationForest(contamination=DEFAULT_ISOLATION_FOREST_CONTAMINATION, random_state=42)
-            # Fit on the scaled data (MinMaxScaler handles constant features)
-            model.fit(scaled_features_np)
-
-            # Use original unit_name as the key
-            models[unit_name] = model
-            trained_count += 1
-            log_ml.debug(f"Successfully trained model for unit: {unit_name}")
-
-        except Exception as e:
-            log_ml.error(f"Failed to train model for unit '{unit_name}': {e}", exc_info=True)
-            if unit_name in models:
-                del models[unit_name]
-            if unit_name in scalers:
-                del scalers[unit_name]
-
-    log_ml.info(f"Finished anomaly model training. Trained: {trained_count}, Skipped (Insufficient Data): {skipped_insufficient_data}, Skipped (Zero Variance): {skipped_zero_variance}")
-
-    # Save models using the original unit names as keys
-    if models:
-        try:
-            save_models(models, ANOMALY_MODEL_TYPE, model_dir_path)
-        except Exception as e:
-            log_ml.error(f"Error saving anomaly models to {model_dir_path}: {e}")
-    if scalers:
-        try:
-            save_models(scalers, SCALER_MODEL_TYPE, model_dir_path) # Uses updated SCALER_MODEL_TYPE
-        except Exception as e:
-            log_ml.error(f"Error saving scalers to {model_dir_path}: {e}")
-
-    return models, scalers, skipped_units
-
-# src/sysdiag_analyzer/ml_engine.py
 
 def detect_anomalies(
     current_features_df: DataFrame,
-    models: Dict[str, IsolationForest], # Expect keys to be SANITIZED names
-    scalers: Dict[str, MinMaxScaler] # Expect keys to be SANITIZED names, # Changed Scaler Type
+    models: Dict[str, Any],
+    scalers: Dict[str, Any],
+    thresholds: Dict[str, float],
 ) -> List[AnomalyInfo]:
-    """
-    Detects anomalies in the latest features using pre-trained models.
-    Uses MinMaxScaler. Ensures key consistency. Uses updated features.
-    """
     _check_ml_dependencies()
     anomalies: List[AnomalyInfo] = []
-
     if current_features_df is None or current_features_df.empty:
-        log_ml.warning("Cannot detect anomalies: Current features DataFrame is empty.")
-        return anomalies
-    if not models:
-        log_ml.warning("Cannot detect anomalies: No pre-trained models provided.")
         return anomalies
 
-    if 'unit_name' not in current_features_df.columns:
-         log_ml.error("Current features DataFrame missing 'unit_name' column.")
-         return anomalies
-    
-    current_features_df = current_features_df.set_index('unit_name', drop=False).copy()
-
-    log_ml.info(f"Detecting anomalies for {len(current_features_df)} units...")
-    detected_count = 0
-
-    for unit_name in current_features_df.index:
+    # The incoming dataframe from a 'run' command is already deduplicated,
+    # so no re-mapping is needed here.
+    for unit_name, unit_data in current_features_df.groupby("unit_name"):
         sanitized_key = _sanitize_filename(unit_name)
-
-        if sanitized_key not in models or sanitized_key not in scalers:
-            log_ml.debug(f"No trained model or scaler found for unit '{unit_name}' (key: '{sanitized_key}'), skipping.")
+        if sanitized_key not in models:
             continue
 
-        try:
-            model = models[sanitized_key]
-            scaler = scalers[sanitized_key]
+        if len(unit_data) < LSTM_TIMESTEPS:
+            continue
 
-            # Get the feature list from the SPECIFIC scaler for THIS unit.
-            if hasattr(scaler, 'feature_names_in_') and scaler.feature_names_in_ is not None:
-                inference_features = list(scaler.feature_names_in_)
-            else:
-                log_ml.warning(f"Scaler for unit '{unit_name}' is missing feature names. Cannot perform inference.")
-                continue
-            
-            # Ensure all required features exist in the input DataFrame for this specific unit
-            missing_features = [f for f in inference_features if f not in current_features_df.columns]
-            if missing_features:
-                log_ml.warning(f"Current features DataFrame is missing columns required by scaler for '{unit_name}': {missing_features}. Skipping unit.")
-                continue
+        model, scaler, threshold = (
+            models[sanitized_key],
+            scalers[sanitized_key],
+            thresholds[sanitized_key],
+        )
+        training_features = [
+            f for f in scaler.feature_names_in_ if f in unit_data.columns
+        ]
+        unit_features_df = unit_data[training_features].copy()
+        unit_features_df[["is_failed", "is_flapping"]] = unit_features_df[
+            ["is_failed", "is_flapping"]
+        ].astype(int)
 
-            features_row_df = current_features_df.loc[[unit_name], inference_features].copy()
+        sequence_data = unit_features_df.tail(LSTM_TIMESTEPS)
+        if len(sequence_data) < LSTM_TIMESTEPS:
+            continue
 
-            for col in ['is_failed', 'is_flapping']:
-                if col in features_row_df.columns:
-                    features_row_df[col] = features_row_df[col].astype(int)
+        scaled_data = scaler.transform(sequence_data)
+        X_test = np.expand_dims(scaled_data, axis=0)
 
-            unit_features_df_filled = features_row_df.fillna(0)
-            
-            scaled_features = scaler.transform(unit_features_df_filled)
-            prediction = model.predict(scaled_features)[0]
-            score = model.score_samples(scaled_features)[0]
+        pred = model.predict(X_test, verbose=0)
+        mae_loss = np.mean(np.abs(pred - X_test), axis=1).flatten()[0]
 
-            log_ml.debug(f"Unit: {unit_name}, Prediction: {prediction}, Score: {score:.4f}")
+        if mae_loss > threshold:
+            anomalies.append(AnomalyInfo(unit_name=unit_name, score=float(mae_loss)))
+            log_ml.info(
+                f"Anomaly detected for '{unit_name}': Reconstruction error {mae_loss:.4f} > threshold {threshold:.4f}"
+            )
 
-            if prediction == -1:
-                if AnomalyInfo:
-                    anomalies.append(AnomalyInfo(unit_name=unit_name, score=score))
-                detected_count += 1
-                log_ml.info(f"Anomaly detected for unit '{unit_name}' (Prediction: {prediction}, Score: {score:.4f})")
-
-        except ValueError as ve:
-             log_ml.error(f"ValueError during anomaly detection for unit '{unit_name}' (likely feature mismatch): {ve}", exc_info=True)
-        except Exception as e:
-            log_ml.error(f"Error detecting anomalies for unit '{unit_name}': {e}", exc_info=True)
-
-    log_ml.info(f"Finished anomaly detection. Found {detected_count} potential anomalies.")
     return anomalies

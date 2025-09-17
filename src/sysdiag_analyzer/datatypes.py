@@ -130,8 +130,7 @@ class ChildProcessGroupUsage:
     parent_unit: str
     process_count: int
     pids: List[int] = field(default_factory=list)
-    # MODIFIED: Changed from percentage to cumulative seconds for accuracy.
-    aggregated_cpu_seconds: Optional[float] = None
+    aggregated_cpu_seconds_total: Optional[float] = None
     aggregated_memory_bytes: Optional[int] = None
 
 

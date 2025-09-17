@@ -34,9 +34,11 @@
 # Directory to store trained ML models. Requires write permissions for retrain-ml.
 # directory = "/var/lib/sysdiag-analyzer/models"
 
-# Isolation Forest 'contamination' parameter (expected proportion of outliers).
-# 'auto' usually works well. Can be a float between 0 and 0.5.
-# anomaly_contamination = "auto"
+# Number of historical data points (timesteps) to use in a sequence for the LSTM model.
+# A larger value helps the model learn longer-term patterns but requires more data to train.
+# Value must be smaller than `min_samples_train`.
+# lstm_timesteps = 5
 
 # Minimum number of historical data points required per unit to train a model.
+# Must be greater than `lstm_timesteps`.
 # min_samples_train = 10

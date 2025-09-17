@@ -7,10 +7,12 @@ system logs, unit dependencies, historical trends, and process activity to provi
 a comprehensive health assessment. It leverages native Linux features, optional
 ML anomaly detection, LLM synthesis, and eBPF tracing for deep insights.
 
-**WORK IN PROGRESS**
-The anomoly detection tends to work but is still under active development and tuning.
+**ANOMALY DETECTION WORK IN PROGRESS**
+The anomaly detection tends to work but is still under active development and tuning.
 
 The LLM analysis and overall health check does tend to work as expected.
+
+Training can be memory intensive so the recommendation is to build a base line of > 300 reports and run `retrain-ml` once, and then only run this if your baseline changes significantly and not on production systems during peak traffic times!
 
 ![Screenshot](screenshot/example.png)
 
@@ -36,10 +38,10 @@ eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, pyth
     *   Provides insights into short-lived processes or unexpected executions.
     *   Requires **root privileges** and specific system libraries (see Prerequisites).
 *   **Historical Persistence:** Saves reports (JSONL.gz) to `/var/lib/sysdiag-analyzer/history/` (configurable), applies retention policy.
-*   **ML Anomaly Detection (Basic):**
-    *   Trains `IsolationForest` per unit on historical metrics (`.[ml]` extras required).
-    *   Detects deviations in the current run. Lower scores (e.g., < -0.1) suggest anomalies.
-    *   Reports units skipped during training due to zero variance (normal for stable units).
+*   **ML Anomaly Detection (LSTM Autoencoder):**
+    *   Trains a model per unit on historical metrics (`.[ml]` extras required).
+    *   Detects deviations from learned temporal patterns. A **high score** (reconstruction error) suggests a potential anomaly.
+    *   By default, excludes device, slice, and scope units from training to conserve memory. Use the `--train-devices` flag to include them.
 *   **LLM Synthesis (Optional):** Uses a local LLM (via Ollama) to synthesize the report (`.[llm]` extra and Ollama setup required).
 
 ## Prerequisites
@@ -50,7 +52,7 @@ eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, pyth
 *   **Root privileges** generally required for full data access, eBPF, and default history/model saving.
 *   **Core Dependencies:** `typer[all]`, `rich`, `psutil`, `tomli` (Python < 3.11), `pygments`.
 *   **(Optional)** `cysystemd`, `dbus-python` (`.[native]`)
-*   **(Optional Extras)** `networkx` (`.[full-graph]`), `pandas`, `scikit-learn`, `joblib` (`.[ml]`), `ollama` (`.[llm]`).
+*   **(Optional Extras)** `networkx` (`.[full-graph]`), `pandas`, `scikit-learn`, `tensorflow`, `joblib` (`.[ml]`), `ollama` (`.[llm]`).
 
 *   **(Optional for eBPF Tracing)**: Enabling the `--enable-ebpf` flag has specific system requirements:
     1.  **BCC (BPF Compiler Collection):** The `bcc` library and tools must be installed.
@@ -126,8 +128,11 @@ sudo sysdiag-analyzer run --enable-ebpf --analyze-ml --analyze-llm
 # Specific module
 sudo sysdiag-analyzer analyze-health
 
-# Retrain ML models
+# Retrain ML models on the last 300 reports (default)
 sudo sysdiag-analyzer retrain-ml
+
+# Retrain including device units (WARNING: HIGH MEMORY USAGE)
+sudo sysdiag-analyzer retrain-ml --train-devices
 
 # Show history
 sudo sysdiag-analyzer show-history
@@ -136,9 +141,83 @@ sudo sysdiag-analyzer show-history
 sysdiag-analyzer config show
 ```
 
+## Sharing models across **IDENTICAL** systems
+
+If you have a fleet of identical apache servers running on the same hardware, you can absolutely share the models across them.
+
+### Step-by-Step Instructions
+
+Here are the practical commands for the export/import process. These commands should be run as `root` or with `sudo`.
+
+#### Step 1: Train the Models on a Reference VM
+
+On one VM that you consider the "source of truth" for normal behavior, run the retraining command. Use a large enough window to get a good baseline.
+
+```bash
+# On your reference VM (e.g., vm-primary-01)
+sudo sysdiag-analyzer retrain-ml --num-reports 500
+```
+
+This will populate the `/var/lib/sysdiag-analyzer/models/` directory with all the trained model artifacts.
+
+#### Step 2: Export the Models
+
+Still on the reference VM, package the entire models directory into a tarball.
+
+```bash
+# Define a version or date for the package
+TIMESTAMP=$(date +"%Y%m%d")
+MODEL_PACKAGE="sysdiag-models-v${TIMESTAMP}.tar.gz"
+
+# Create the compressed archive
+sudo tar -czvf "${MODEL_PACKAGE}" -C /var/lib/sysdiag-analyzer/ models
+
+# The '-C' option tells tar to change to that directory first, 
+# so the archive paths will be 'models/...' instead of the full absolute path.
+```
+
+You will now have a file named something like `sysdiag-models-v20250917.tar.gz` in your current directory.
+
+#### Step 3: Distribute the Model Package
+
+Copy this package to a target VM. You can do this manually with `scp` or, preferably, automate it with a configuration management tool.
+
+**Manual Example (using `scp`):**
+
+```bash
+# From your local machine or the reference VM
+scp ./${MODEL_PACKAGE} user@target-vm-01:/tmp/
+```
+
+#### Step 4: Import and Deploy on Target VMs
+
+On each target VM, unpack the archive into the correct location. It's best practice to remove the old models first to ensure a clean state.
+
+```bash
+# On your target VM (e.g., vm-target-01)
+MODEL_PACKAGE="/tmp/sysdiag-models-v20250917.tar.gz"
+MODELS_BASE_DIR="/var/lib/sysdiag-analyzer"
+
+# 1. (Optional but Recommended) Remove the old models directory
+sudo rm -rf "${MODELS_BASE_DIR}/models"
+
+# 2. Ensure the base directory exists
+sudo mkdir -p "${MODELS_BASE_DIR}"
+
+# 3. Unpack the new models into the base directory
+sudo tar -xzvf "${MODEL_PACKAGE}" -C "${MODELS_BASE_DIR}"
+
+# 4. (Optional) Verify permissions are appropriate
+# The user running sysdiag-analyzer needs read access.
+# If that user is not root, you may need to adjust permissions.
+```
+
+After these steps, the `/var/lib/sysdiag-analyzer/models` directory on the target VM will be an exact copy of the one from your reference VM.
+
+
 ## Interpreting Special Features
 
-*   **ML Anomalies:** Lower scores indicate higher anomaly likelihood. Zero variance skips are normal for unchanging units.
+*   **ML Anomalies:** The score is a "reconstruction error." A score near 0 is normal. A **high score** indicates the unit's current behavior deviates from its learned historical patterns and is potentially anomalous.
 *   **eBPF:** Look for unexpected process executions (filename/comm), frequent short-lived processes, or non-zero exit codes correlated with failures.
 *   **Child Processes:** Useful for identifying resource usage by workloads (like containers) started by systemd services (e.g., `docker.service`). High aggregate CPU/Memory for a command under a specific parent unit warrants investigation.
 

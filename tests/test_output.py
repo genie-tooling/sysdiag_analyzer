@@ -162,8 +162,8 @@ def test_format_resource_report_with_child_procs(mock_console):
     """Test resource formatting including the child process group table."""
     result = ResourceAnalysisResult(
         child_process_groups=[
-            ChildProcessGroupUsage(command_name="python3", parent_unit="my_app.service", process_count=5, pids=[101, 102, 103], aggregated_cpu_seconds=95.5, aggregated_memory_bytes=200*1024*1024),
-            ChildProcessGroupUsage(command_name="nginx", parent_unit="nginx.service", process_count=2, pids=[201, 202], aggregated_cpu_seconds=5.1, aggregated_memory_bytes=50*1024*1024),
+            ChildProcessGroupUsage(command_name="python3", parent_unit="my_app.service", process_count=5, pids=[101, 102, 103], aggregated_cpu_seconds_total=95.5, aggregated_memory_bytes=200*1024*1024),
+            ChildProcessGroupUsage(command_name="nginx", parent_unit="nginx.service", process_count=2, pids=[201, 202], aggregated_cpu_seconds_total=5.1, aggregated_memory_bytes=50*1024*1024),
         ]
     )
     output.format_resource_report(result, mock_console)

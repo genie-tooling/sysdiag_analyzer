@@ -18,7 +18,6 @@ from sysdiag_analyzer.datatypes import FullDependencyAnalysisResult
 
 # --- Mock Data ---
 
-# FIX: This mock data represents the NON-plain output format
 MOCK_SYSTEMCTL_DEPS_OUTPUT_GOOD = """
 unitA.service
 ● ├─depB.service
@@ -33,7 +32,6 @@ unitE.service
 unitF.service
 """
 
-# FIX: Expected data based on the parser assuming 'Requires' and stripping tree chars
 EXPECTED_DEPS_DATA_GOOD = {
     'unitA.service': {'Requires': ['depB.service', 'depC.target']},
     'unitB.service': {'Requires': ['depD.service']},
@@ -50,18 +48,15 @@ unitA.service
 unitB.service
 unitC.service
 """
-# FIX: Malformed output mock
 MOCK_SYSTEMCTL_DEPS_OUTPUT_MALFORMED = """
 ● depB.service
 unitA.service
 ● └─depC.service
 """
-# FIX: Expected for malformed based on current parsing logic (depB skipped, unitA has depC)
 EXPECTED_DEPS_DATA_MALFORMED = {
     'unitA.service': {'Requires': ['depC.service']},
     # depB.service is skipped because it appeared before unitA, so it's not in the dict
 }
-
 
 # --- Fixtures ---
 
@@ -79,9 +74,7 @@ def test_fetch_all_deps_fallback_success(mock_run_subprocess_graph):
     """Test successful parsing of mock systemctl list-dependencies output."""
     deps, error = dependencies._fetch_all_dependencies_fallback()
     assert error is None
-    # FIX: Compare against the corrected expected data
     assert deps == EXPECTED_DEPS_DATA_GOOD
-    # FIX: Command should not have --plain anymore
     expected_cmd = ["systemctl", "list-dependencies", "--all", "--no-legend", "--no-pager"]
     mock_run_subprocess_graph.assert_called_once_with(expected_cmd)
 
@@ -97,7 +90,6 @@ def test_fetch_all_deps_fallback_no_deps_output(mock_run_subprocess_graph):
     mock_run_subprocess_graph.return_value = (True, MOCK_SYSTEMCTL_DEPS_OUTPUT_NO_DEPS, "")
     deps, error = dependencies._fetch_all_dependencies_fallback()
     assert error is None
-    # FIX: Parser should add units even if they have no deps listed below them
     assert deps == {'unitA.service': {}, 'unitB.service': {}, 'unitC.service': {}}
 
 def test_fetch_all_deps_fallback_command_failure(mock_run_subprocess_graph):
@@ -114,9 +106,7 @@ def test_fetch_all_deps_fallback_malformed_output(mock_run_subprocess_graph, cap
     mock_run_subprocess_graph.return_value = (True, MOCK_SYSTEMCTL_DEPS_OUTPUT_MALFORMED, "")
     deps, error = dependencies._fetch_all_dependencies_fallback()
     assert error is None
-    # FIX: Check against corrected expected data matching current logic
     assert deps == EXPECTED_DEPS_DATA_MALFORMED
-    # FIX: Check the actual log message format
     assert "Skipping dependency line found before any main unit identified" in caplog.text
     assert "'depB.service'" in caplog.text # Check the unit name is in the log
 
@@ -311,7 +301,6 @@ def test_analyze_full_graph_empty_data(mock_fetch, mock_build, mock_find):
 
     result = dependencies.analyze_full_dependency_graph()
 
-    # FIX: Check that no error is set
     assert result.analysis_error is None
     assert result.dependency_fetch_error is None
     assert result.graph_build_error is None
