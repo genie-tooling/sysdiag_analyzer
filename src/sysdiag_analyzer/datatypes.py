@@ -200,7 +200,9 @@ class FailedUnitDependencyInfo:
 class DependencyAnalysisResult:
     """Aggregates all dependency analysis findings for failed units."""
 
-    failed_unit_dependencies: List[FailedUnitDependencyInfo] = field(default_factory=list)
+    failed_unit_dependencies: List[FailedUnitDependencyInfo] = field(
+        default_factory=list
+    )
     analysis_error: Optional[str] = None
 
 
@@ -288,6 +290,17 @@ class EBPFAnalysisResult:
     units_with_execs: Dict[str, int] = field(default_factory=dict)
     units_with_exits: Dict[str, int] = field(default_factory=dict)
     error: Optional[str] = None
+
+
+# --- Single Unit Analysis ---
+@dataclass
+class SingleUnitReport:
+    """Structure for the focused analysis of a single unit."""
+
+    unit_info: Optional[UnitHealthInfo] = None
+    resource_usage: Optional[UnitResourceUsage] = None
+    dependency_info: Optional[FailedUnitDependencyInfo] = None
+    analysis_error: Optional[str] = None
 
 
 # --- Full System Report ---

@@ -6,22 +6,21 @@ import json
 import logging
 import psutil
 from dataclasses import asdict
-from typing import Any, List, Optional  # Added Dict
+from typing import Any, List, Optional, Dict
 
 try:
     from pygments.util import ClassNotFound
 except ImportError:
     ClassNotFound = Exception  # Fallback if pygments isn't installed
 
-from rich.console import Console, Group  # Correctly import Group
-from rich.markdown import Markdown  # Added for LLM output
+from rich.console import Console, Group
+from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-# Import specific datatypes for type hinting
 from .datatypes import (
     BootAnalysisResult,
     DependencyAnalysisResult,
@@ -33,6 +32,8 @@ from .datatypes import (
     MLAnalysisResult,
     ResourceAnalysisResult,
     SystemReport,
+    SingleUnitReport,
+    FailedUnitDependencyInfo,
 )
 
 log = logging.getLogger(__name__)
@@ -99,15 +100,12 @@ def _format_log_snippet(logs: List[str], max_lines: int = 3) -> Any:
 
     renderable_parts = []
 
-    # 1. Create the header if necessary
     if num_omitted > 0:
         header = Text(f"[dim]... ({num_omitted} older lines omitted) ...[/dim]\n")
         renderable_parts.append(header)
 
-    # 2. Create the main content (either Syntax or plain Text)
     lexer = "log" if any(c in log_content for c in "[]:=") else "text"
     try:
-        # If syntax highlighting works, add the Syntax object
         syntax_block = Syntax(
             log_content, lexer, theme="default", line_numbers=False, word_wrap=True
         )
@@ -116,7 +114,6 @@ def _format_log_snippet(logs: List[str], max_lines: int = 3) -> Any:
         log.warning(
             f"Pygments lexer '{lexer}' not found (is 'pygments' installed?). Falling back to plain text."
         )
-        # If it fails, add the raw content as a Text object
         renderable_parts.append(Text(log_content))
     except Exception:
         log.warning(
@@ -124,15 +121,11 @@ def _format_log_snippet(logs: List[str], max_lines: int = 3) -> Any:
         )
         renderable_parts.append(Text(log_content))
 
-    # 3. Return the correct renderable type
     if not renderable_parts:
-        return Text("")  # Should not happen, but a safe fallback
+        return Text("")
     elif len(renderable_parts) == 1:
-        # If it's just the syntax block or just the header, return it directly
         return renderable_parts[0]
     else:
-        # If we have a header AND content, group them.
-        # The Table cell will render the group correctly.
         return Group(*renderable_parts)
 
 
@@ -152,7 +145,6 @@ def format_boot_report(result: Optional[BootAnalysisResult], console: Console) -
 
     content_parts: List[Any] = []
 
-    # --- Boot Times ---
     if result.times:
         if result.times.error:
             content_parts.append(f"[dim]Times:[/dim] [red]Error: {result.times.error}[/red]")
@@ -184,7 +176,6 @@ def format_boot_report(result: Optional[BootAnalysisResult], console: Console) -
     else:
         content_parts.append("[dim]Times:[/dim] [yellow]Timing data unavailable.[/yellow]")
 
-    # --- Boot Blame ---
     if content_parts:
         content_parts.append("")
     if result.blame_error:
@@ -212,7 +203,6 @@ def format_boot_report(result: Optional[BootAnalysisResult], console: Console) -
             "[dim]Blame (Journal):[/dim] [yellow]No unit timing data found or parsed from journal.[/yellow]"
         )
 
-    # --- Critical Chain ---
     if content_parts:
         content_parts.append("")
     if result.critical_chain_error:
@@ -254,10 +244,8 @@ def format_boot_report(result: Optional[BootAnalysisResult], console: Console) -
             "[dim]Critical Chain:[/dim] [yellow]No critical chain data found or parsed.[/yellow]"
         )
 
-    # --- Final Print ---
     renderable_parts = [part for part in content_parts if part]
     if renderable_parts:
-        # Use Group to render multiple items within the Panel
         console.print(
             Panel(
                 Group(*renderable_parts),
@@ -287,7 +275,6 @@ def format_health_report(
 
     output_elements: List[Any] = []
     if result.analysis_error:
-        # If there's an analysis error, show only that in its own panel
         console.print(
             Panel(
                 f"[red]Error during analysis: {result.analysis_error}[/red]",
@@ -296,9 +283,8 @@ def format_health_report(
                 expand=False,
             )
         )
-        return  # Don't print potentially partial/misleading tables if analysis failed
+        return
 
-    # --- Failed Units ---
     if result.failed_units:
         table = Table(
             title=f"Failed Units ({len(result.failed_units)})",
@@ -340,7 +326,6 @@ def format_health_report(
             )
         output_elements.append(table)
 
-    # --- Flapping Units ---
     if result.flapping_units:
         table = Table(
             title=f"Potentially Flapping Units ({len(result.flapping_units)})",
@@ -362,7 +347,6 @@ def format_health_report(
             )
         output_elements.append(table)
 
-    # --- Problematic Sockets ---
     if result.problematic_sockets:
         table = Table(
             title=f"Problematic Sockets ({len(result.problematic_sockets)})",
@@ -384,7 +368,6 @@ def format_health_report(
             )
         output_elements.append(table)
 
-    # --- Problematic Timers ---
     if result.problematic_timers:
         table = Table(
             title=f"Problematic Timers ({len(result.problematic_timers)})",
@@ -415,7 +398,7 @@ def format_health_report(
                         )
                         last_trigger_str = dt_object.strftime("%Y-%m-%d %H:%M:%S %Z")
                 except (ValueError, TypeError, OverflowError):
-                    last_trigger_str = str(ts_usec)  # Fallback
+                    last_trigger_str = str(ts_usec)
             table.add_row(
                 unit.name,
                 state_str,
@@ -425,7 +408,6 @@ def format_health_report(
             )
         output_elements.append(table)
 
-    # --- Summary Message ---
     summary_message = None
     if (
         not result.failed_units
@@ -439,7 +421,7 @@ def format_health_report(
             border_style="green",
             expand=False,
         )
-    elif not output_elements:  # If tables were empty but no error reported
+    elif not output_elements:
         summary_message = Panel(
             f"[dim]No specific health issues identified among {result.all_units_count} units analyzed.[/dim]",
             title="Service Health Analysis Summary",
@@ -447,16 +429,14 @@ def format_health_report(
             expand=False,
         )
 
-    # --- Final Print ---
     if output_elements:
         console.print(Padding(f"Analyzed {result.all_units_count} units.", (0, 0, 1, 0)))
         for element in output_elements:
-            console.print(element)  # Print tables individually
+            console.print(element)
     elif summary_message:
-        console.print(summary_message)  # Print only the summary if no tables
+        console.print(summary_message)
     else:
         log.warning("format_health_report generated no output elements.")
-        # Should be covered by analysis_error check
 
 
 def format_resource_report(
@@ -482,7 +462,6 @@ def format_resource_report(
         output_elements.append(f"[red]Analysis Error: {result.analysis_error}[/red]")
         border_style = "red"
 
-    # --- System-Wide Usage ---
     if result.system_usage:
         sys_usage = result.system_usage
         if sys_usage.error:
@@ -525,9 +504,8 @@ def format_resource_report(
     )
     has_child_data = result.child_process_groups
     if output_elements and (has_unit_data or has_child_data):
-        output_elements.append("")  # Separator
+        output_elements.append("")
 
-    # --- Top Consumers Tables ---
     if result.top_cpu_units:
         table = Table(
             title=f"Top {len(result.top_cpu_units)} CPU Consumers (systemd Units - cgroup)",
@@ -599,7 +577,6 @@ def format_resource_report(
             )
         output_elements.append(table)
 
-    # --- Child Process Groups ---
     if result.child_process_groups:
         table = Table(
             title=f"Child Process Group Usage ({len(result.child_process_groups)} groups - psutil)",
@@ -610,12 +587,10 @@ def format_resource_report(
         table.add_column("Command Name", style="cyan", no_wrap=True)
         table.add_column("Parent Unit", style="blue", no_wrap=True)
         table.add_column("Process Count", style="green", width=8, justify="right")
-        # MODIFIED: Changed header from CPU % to CPU Time.
         table.add_column("Aggr. CPU Time", style="magenta", width=12, justify="right")
         table.add_column("Aggr. Memory", style="yellow", width=14, justify="right")
         table.add_column("Example PIDs", style="dim")
         for group in result.child_process_groups:
-            # MODIFIED: Format cumulative seconds instead of percentage.
             cpu_str = _format_seconds(group.aggregated_cpu_seconds)
             mem_str = _format_bytes(group.aggregated_memory_bytes)
             pids_str = ", ".join(map(str, group.pids))
@@ -631,9 +606,7 @@ def format_resource_report(
             )
         output_elements.append(table)
 
-    # --- Final Print ---
     if output_elements:
-        # Use Group for correct rendering within Panel
         final_panel = Panel(
             Group(*output_elements), title=title, border_style=border_style, expand=False
         )
@@ -746,7 +719,6 @@ def format_log_report(result: Optional[LogAnalysisResult], console: Console) -> 
             )
         output_elements.append(table)
     if output_elements:
-        # Use Group for correct rendering within Panel
         final_panel = Panel(
             Group(*output_elements), title=title, border_style=border_style, expand=False
         )
@@ -759,6 +731,34 @@ def format_log_report(result: Optional[LogAnalysisResult], console: Console) -> 
                 border_style="dim",
             )
         )
+
+
+def _format_dependency_table(unit_info: FailedUnitDependencyInfo) -> Optional[Table]:
+    """Helper to create a Rich Table for a unit's dependencies."""
+    if not unit_info.dependencies:
+        return None
+
+    table = Table(
+        show_header=True,
+        header_style="bold blue",
+        expand=False,
+        box=None,
+        padding=(0, 1),
+    )
+    table.add_column("Dependency", style="cyan", no_wrap=True, min_width=20)
+    table.add_column("Type", style="magenta", width=10)
+    table.add_column("State (L / A / S)", style="white", width=25)
+    table.add_column("Problematic?", style="yellow", width=12, justify="center")
+
+    for dep in unit_info.dependencies:
+        state_str = f"{dep.current_load_state or '?'} / {dep.current_active_state or '?'} / {dep.current_sub_state or '?'}"
+        if dep.current_active_state == "failed":
+            state_str = f"[red]{state_str}[/red]"
+        elif dep.current_active_state == "inactive":
+            state_str = f"[dim]{state_str}[/dim]"
+        problem_str = "[bold red]YES[/bold red]" if dep.is_problematic else "[dim]No[/dim]"
+        table.add_row(dep.name, dep.type, state_str, problem_str)
+    return table
 
 
 def format_dependency_report(
@@ -780,7 +780,6 @@ def format_dependency_report(
         return
 
     if result.analysis_error:
-        # If overall analysis failed, just show that
         console.print(
             Panel(
                 f"[red]Overall Analysis Error: {result.analysis_error}[/red]",
@@ -802,7 +801,6 @@ def format_dependency_report(
         )
         return
 
-    # Print a panel for each failed unit analyzed
     console.print(
         Panel(
             f"[bold]Analysis for {len(result.failed_unit_dependencies)} Failed Unit(s)[/bold]",
@@ -811,40 +809,19 @@ def format_dependency_report(
             expand=False,
         )
     )
-    for i, unit_info in enumerate(result.failed_unit_dependencies):
+    for unit_info in result.failed_unit_dependencies:
         unit_content: List[Any] = []
         if unit_info.error:
             unit_content.append(
                 f"  [red]Error analyzing dependencies: {unit_info.error}[/red]"
             )
 
-        if not unit_info.dependencies and not unit_info.error:
+        dep_table = _format_dependency_table(unit_info)
+        if dep_table:
+            unit_content.append(dep_table)
+        elif not unit_info.error:
             unit_content.append("  [dim]No dependencies listed or analyzed.[/dim]")
-        elif unit_info.dependencies:
-            table = Table(
-                show_header=True,
-                header_style="bold blue",
-                expand=False,
-                box=None,
-                padding=(0, 1),
-            )
-            table.add_column("Dependency", style="cyan", no_wrap=True, min_width=20)
-            table.add_column("Type", style="magenta", width=10)
-            table.add_column("State (L / A / S)", style="white", width=25)
-            table.add_column(
-                "Problematic?", style="yellow", width=12, justify="center"
-            )
-            for dep in unit_info.dependencies:
-                state_str = f"{dep.current_load_state or '?'} / {dep.current_active_state or '?'} / {dep.current_sub_state or '?'}"
-                if dep.current_active_state == "failed":
-                    state_str = f"[red]{state_str}[/red]"
-                elif dep.current_active_state == "inactive":
-                    state_str = f"[dim]{state_str}[/dim]"
-                problem_str = "[bold red]YES[/]" if dep.is_problematic else "[dim]No[/]"
-                table.add_row(dep.name, dep.type, state_str, problem_str)
-            unit_content.append(table)
 
-        # Print a separate panel for each unit's dependencies
         console.print(
             Panel(
                 Padding(Group(*unit_content), (0, 1)),
@@ -950,9 +927,8 @@ def format_ml_report(result: Optional[MLAnalysisResult], console: Console) -> No
         for anomaly in sorted_anomalies:
             score_str = f"{anomaly.score:.4f}"
             table.add_row(anomaly.unit_name, score_str)
-        output_elements.append(table)  # Add table object
+        output_elements.append(table)
     if output_elements:
-        # Use Group for correct rendering within Panel
         final_panel = Panel(
             Group(*output_elements), title=title, border_style=border_style, expand=False
         )
@@ -963,14 +939,14 @@ def format_llm_report(result: Optional[LLMAnalysisResult], console: Console) -> 
     """Formats and prints the LLM Analysis results using Rich."""
     log.debug(f"format_llm_report called with result object: {result is not None}")
     title = "LLM Synthesis & Recommendations"
-    border_style = "green"  # Default to green
+    border_style = "green"
     if not result:
         log.debug("Skipping LLM report formatting (no result data).")
         return
     output_elements = []
     if result.error:
         output_elements.append(f"[red]LLM Analysis Error: {result.error}[/red]")
-        border_style = "red"  # Change border if error
+        border_style = "red"
     meta_parts = []
     if result.provider_used:
         meta_parts.append(f"Provider: {result.provider_used}")
@@ -984,7 +960,7 @@ def format_llm_report(result: Optional[LLMAnalysisResult], console: Console) -> 
         output_elements.append(f"[dim]{' | '.join(meta_parts)}[/dim]")
     if result.synthesis:
         if output_elements:
-            output_elements.append("")  # Add separator
+            output_elements.append("")
         try:
             md = Markdown(result.synthesis)
             output_elements.append(md)
@@ -995,25 +971,23 @@ def format_llm_report(result: Optional[LLMAnalysisResult], console: Console) -> 
             output_elements.append(result.synthesis)
     elif not result.error:
         output_elements.append("\n[dim]LLM did not produce a synthesis.[/dim]")
-    # Final Print
+
     md_object = None
     str_elements = []
     for el in output_elements:
         if isinstance(el, Markdown):
-            md_object = el  # Assume only one Markdown object for now
+            md_object = el
         else:
             str_elements.append(str(el))
     final_content_str = "\n".join(str_elements).strip()
     if final_content_str or md_object:
-        # Use Group for rendering non-Markdown elements
         content_group = Group(*str_elements) if str_elements else None
         panel_content: Any
         if content_group and md_object:
-            # Combine Group and Markdown
             panel_content = Group(content_group, Padding(md_object, (1, 0, 0, 0)))
         elif md_object:
             panel_content = md_object
-        else:  # Only string content
+        else:
             panel_content = content_group
 
         if panel_content:
@@ -1030,15 +1004,11 @@ def format_ebpf_report(result: Optional[EBPFAnalysisResult], console: Console) -
         log.debug("Skipping eBPF report formatting (no result data).")
         return
 
-    # --- BUG FIX START ---
-    # Get the system boot time once.
     try:
         boot_time_unix = psutil.boot_time()
     except Exception as e:
         log.error(f"Could not get system boot time from psutil: {e}. eBPF timestamps will be incorrect.")
-        # Fallback to a value that will make it obvious something is wrong, but won't crash.
         boot_time_unix = 0.0
-    # --- BUG FIX END ---
 
     output_elements: List[Any] = []
     if result.error:
@@ -1054,34 +1024,130 @@ def format_ebpf_report(result: Optional[EBPFAnalysisResult], console: Console) -
     else:
         if result.exec_events:
             exec_table = Table(title=f"Recent Process Executions (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})", show_header=True, header_style="bold blue", expand=True)
-            exec_table.add_column("Timestamp", style="dim", width=26); exec_table.add_column("PID", style="green", width=8); exec_table.add_column("PPID", style="blue", width=8); exec_table.add_column("Comm", style="cyan", width=16); exec_table.add_column("Filename", style="magenta")
+            exec_table.add_column("Timestamp", style="dim", width=26)
+            exec_table.add_column("PID", style="green", width=8)
+            exec_table.add_column("PPID", style="blue", width=8)
+            exec_table.add_column("Comm", style="cyan", width=16)
+            exec_table.add_column("Filename", style="magenta")
             for event in result.exec_events[-MAX_EBPF_EVENTS_TO_SHOW:]:
-                # --- BUG FIX START ---
-                # Calculate wall clock time by adding monotonic time to boot time.
                 event_time_unix = boot_time_unix + (event.timestamp_ns / 1e9)
                 ts = datetime.datetime.fromtimestamp(event_time_unix, tz=datetime.timezone.utc)
-                # --- BUG FIX END ---
                 ts_str = ts.isoformat(timespec="milliseconds")
                 exec_table.add_row(ts_str, str(event.pid), str(event.ppid), event.comm, event.filename)
             output_elements.append(exec_table)
 
         if result.exit_events:
             exit_table = Table(title=f"Recent Process Exits (eBPF - Last {MAX_EBPF_EVENTS_TO_SHOW})", show_header=True, header_style="bold blue", expand=True)
-            exit_table.add_column("Timestamp", style="dim", width=26); exit_table.add_column("PID", style="green", width=8); exit_table.add_column("PPID", style="blue", width=8); exit_table.add_column("Comm", style="cyan", width=16); exit_table.add_column("Exit Code", style="yellow", width=10)
+            exit_table.add_column("Timestamp", style="dim", width=26)
+            exit_table.add_column("PID", style="green", width=8)
+            exit_table.add_column("PPID", style="blue", width=8)
+            exit_table.add_column("Comm", style="cyan", width=16)
+            exit_table.add_column("Exit Code", style="yellow", width=10)
             for event in result.exit_events[-MAX_EBPF_EVENTS_TO_SHOW:]:
-                # --- BUG FIX START ---
                 event_time_unix = boot_time_unix + (event.timestamp_ns / 1e9)
                 ts = datetime.datetime.fromtimestamp(event_time_unix, tz=datetime.timezone.utc)
-                # --- BUG FIX END ---
                 ts_str = ts.isoformat(timespec="milliseconds")
                 exit_code_str = str(event.exit_code)
-                if event.exit_code != 0: exit_code_str = f"[bold red]{exit_code_str}[/bold red]"
+                if event.exit_code != 0:
+                    exit_code_str = f"[bold red]{exit_code_str}[/bold red]"
                 exit_table.add_row(ts_str, str(event.pid), str(event.ppid), event.comm, exit_code_str)
             output_elements.append(exit_table)
 
     valid_elements = [elem for elem in output_elements if elem]
     if valid_elements:
         console.print(Panel(Group(*valid_elements), title=title, border_style=border_style, expand=False))
+
+# --- Single Unit Report Formatting ---
+def format_rich_single_unit_report(
+    report: Optional[SingleUnitReport], console: Console
+) -> None:
+    """Formats the focused single unit report using Rich."""
+    if not report:
+        console.print(Panel("[bold red]Error: No analysis report generated for the unit.[/bold red]"))
+        return
+
+    if report.analysis_error:
+        console.print(Panel(f"[bold red]Error:[/bold red] {report.analysis_error}"))
+        return
+
+    unit = report.unit_info
+    if not unit:
+        console.print(Panel("[bold red]Error: Unit information is missing from the report.[/bold red]"))
+        return
+
+    # --- Header Panel ---
+    console.print(Panel(
+        f"[bold cyan]{unit.name}[/bold cyan]\n{unit.description or '[dim]No description[/dim]'}",
+        title="Unit Overview", border_style="green"
+    ))
+
+    # --- Main Info Table ---
+    main_table = Table.grid(expand=True, padding=(0, 2))
+    main_table.add_column(ratio=1); main_table.add_column(ratio=2)
+
+    color = 'green' if unit.active_state == 'active' else 'red' if unit.active_state == 'failed' else 'yellow'
+    state_text = f"[bold {color}]{unit.active_state or 'N/A'}[/bold {color}] ({unit.sub_state or 'N/A'})"
+
+    main_table.add_row("[bold]Load State:[/bold]", unit.load_state or "[dim]N/A[/dim]")
+    main_table.add_row("[bold]Active State:[/bold]", state_text)
+    if unit.details.get('Result'):
+        main_table.add_row("[bold]Last Result:[/bold]", str(unit.details.get('Result')))
+    if unit.details.get('MainPID'):
+        main_table.add_row("[bold]Main PID:[/bold]", str(unit.details.get('MainPID')))
+    if unit.details.get('NRestarts'):
+        main_table.add_row("[bold]Restarts:[/bold]", str(unit.details.get('NRestarts')))
+    if unit.path:
+        main_table.add_row("[bold]DBus Path:[/bold]", f"[dim]{unit.path}[/dim]")
+
+    console.print(Panel(main_table, title="Status & Properties", border_style="blue"))
+
+    # --- Resource Usage ---
+    if report.resource_usage:
+        res = report.resource_usage
+        res_table = Table.grid(expand=True, padding=(0, 2))
+        res_table.add_column(ratio=1); res_table.add_column(ratio=2)
+        res_table.add_row("[bold]CPU Time:[/bold]", _format_nanoseconds(res.cpu_usage_nsec))
+        res_table.add_row("[bold]Current Memory:[/bold]", _format_bytes(res.memory_current_bytes))
+        res_table.add_row("[bold]Peak Memory:[/bold]", _format_bytes(res.memory_peak_bytes))
+        res_table.add_row("[bold]I/O Read:[/bold]", _format_bytes(res.io_read_bytes))
+        res_table.add_row("[bold]I/O Write:[/bold]", _format_bytes(res.io_write_bytes))
+        res_table.add_row("[bold]Tasks:[/bold]", str(res.tasks_current or 0))
+        if res.error:
+            res_table.add_row("[bold red]Error:[/bold red]", res.error)
+        console.print(Panel(res_table, title="Resource Usage (cgroup)", border_style="yellow"))
+
+    # --- Dependencies ---
+    if report.dependency_info:
+        dep_info = report.dependency_info
+        dep_content = []
+        if dep_info.error:
+            dep_content.append(f"[red]Error analyzing dependencies: {dep_info.error}[/red]")
+        dep_table = _format_dependency_table(dep_info)
+        if dep_table:
+            dep_content.append(dep_table)
+        elif not dep_info.error:
+            dep_content.append("[dim]No dependencies found.[/dim]")
+        if dep_content:
+            console.print(Panel(Group(*dep_content), title="Dependencies", border_style="cyan"))
+
+    # --- Logs ---
+    if unit.recent_logs:
+        log_panel_content = _format_log_snippet(unit.recent_logs, max_lines=50)
+        console.print(Panel(log_panel_content, title=f"Recent Logs (Last {len(unit.recent_logs)})", border_style="magenta"))      
+
+def format_json_single_unit_report(report: Optional[SingleUnitReport]) -> str:
+    """Formats the single unit report as a JSON string."""
+    if report is None:
+        return json.dumps({"error": "No analysis report generated for the unit."}, indent=2)
+    try:
+        report_dict = asdict(report)
+        return json.dumps(report_dict, indent=2, default=str)
+    except Exception as e:
+        log.error(f"Failed to serialize single unit report to JSON: {e}")
+        return json.dumps(
+            {"error": "Failed to serialize report", "details": str(e)}, indent=2
+        )
+
 
 # --- Full Report Formatting ---
 def format_rich_report(report: Optional[SystemReport], console: Console) -> None:
