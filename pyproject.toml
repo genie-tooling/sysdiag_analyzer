@@ -79,8 +79,8 @@ dev = [
     # Include LLM deps in dev
     "ollama>=0.1.0,<0.2.0",
     "openai>=1.0.0,<2.0.0",
-    # Include eBPF deps in dev
-    "bcc; platform_system=='Linux'", # Add bcc for eBPF
+    # eBPF bindings (python3-bpfcc / python3-bcc) come from the distro, not PyPI
+    # (see the [ebpf] extra). CI installs them via apt; eBPF tests skip if absent.
     "prometheus-client>=0.21.1",
 ]
 # Keep explicit groups for clarity if desired
@@ -103,8 +103,14 @@ llm = [ # New group for LLM features
 openai = [ # OpenAI-compatible backends (OpenAI, vLLM, llama.cpp, LocalAI, ...)
     "openai>=1.0.0,<2.0.0",
 ]
-ebpf = [ # New group for eBPF features
-    "bcc; platform_system=='Linux'", # Python bindings for BPF Compiler Collection
+ebpf = [
+    # BCC's Python bindings are NOT on PyPI (the PyPI "bcc" project is an
+    # unrelated package). Install them from your distro instead:
+    #   Debian/Ubuntu: sudo apt install python3-bpfcc bpfcc-tools libbpfcc-dev
+    #   Fedora/RHEL:   sudo dnf install python3-bcc bcc bcc-devel
+    # plus matching kernel headers, and use a venv created with
+    # --system-site-packages so the `bcc` module is importable.
+    # This group is intentionally empty; it documents the feature + its deps.
 ]
 exporter = [
     "prometheus-client>=0.21.1",

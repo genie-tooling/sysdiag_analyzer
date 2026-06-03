@@ -31,11 +31,10 @@ jobs:
         # Dependencies for dbus-python, cysystemd
         sudo apt-get install -y --no-install-recommends \
           libdbus-1-dev python3-dev gcc pkg-config libsystemd-dev
-        # Dependencies for BCC (eBPF) - May still have issues without matching kernel headers
-        # Note: Running actual eBPF tests might fail reliably in standard GH runners
-        # Consider skipping eBPF tests tagged with @pytest.mark.needs_ebpf in CI if they fail
+        # BCC (eBPF) Python bindings come from the distro, not PyPI. eBPF tests
+        # are gated (needs_ebpf / HAS_BCC) and skip if the module can't load.
         sudo apt-get install -y --no-install-recommends \
-          bpfcc-tools libbpfcc-dev linux-headers-generic # Attempt generic headers
+          python3-bpfcc bpfcc-tools libbpfcc-dev linux-headers-generic # Attempt generic headers
 
     - name: Install Python Dependencies
       run: |

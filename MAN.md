@@ -57,10 +57,13 @@ SYSDIAG-ANALYZER(1)
 
               **--enable-ebpf**
                      Enable eBPF-based process execution and exit tracing using
-                     the `bcc` library. Requires root privileges and the `bcc`
-                     library and matching kernel headers to be installed
-                     (`sysdiag-analyzer[ebpf]` extra). Tracing occurs only
-                     during the `sysdiag-analyzer run` execution.
+                     the `bcc` library. Requires root privileges, matching kernel
+                     headers, and the BCC Python bindings installed from your
+                     distribution (`python3-bpfcc` on Debian/Ubuntu,
+                     `python3-bcc` on Fedora) — these are not on PyPI, so the
+                     `sysdiag-analyzer[ebpf]` extra only documents the
+                     requirement. Tracing occurs only during the
+                     `sysdiag-analyzer run` execution.
 
               **--analyze-full-graph**
                      Perform full systemd dependency graph analysis to detect
@@ -476,9 +479,12 @@ SYSDIAG-ANALYZER(1)
            with `sudo` or as root, especially for `run`, `retrain-ml`, or when
            accessing default history/model paths.
        *   **Missing Optional Dependencies:** Errors like "ImportError: No module
-           named 'networkx'" or "'bcc' library not installed" indicate a missing
-           optional feature set. Install the required extra, e.g., `pip install
-           sysdiag-analyzer[full-graph]`, `sysdiag-analyzer[ebpf]`.
+           named 'networkx'" indicate a missing optional feature set. Install the
+           required extra, e.g., `pip install sysdiag-analyzer[full-graph]`,
+           `[ml]`, `[llm]`, `[openai]`, `[exporter]`. The "'bcc' library not
+           installed" error is the exception: BCC's Python bindings come from the
+           distro (`python3-bpfcc` / `python3-bcc`), not from `[ebpf]` (which is
+           documentation-only).
        *   **Configuration Issues:** Use `sysdiag-analyzer config show` to verify
            the loaded configuration. Check TOML syntax and file paths.
        *   **eBPF Failures:** Often related to missing `bcc` or incompatible/missing

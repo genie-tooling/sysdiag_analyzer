@@ -52,21 +52,21 @@ eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, pyth
 *   **Root privileges** generally required for full data access, eBPF, and default history/model saving.
 *   **Core Dependencies (small, pure-Python):** `typer`, `rich`, `psutil`, `pygments`. Config parsing uses the stdlib `tomllib` (Python 3.11+). A base `pip install` pulls only these — every heavyweight feature lives behind an extra below.
 *   **(Optional)** `cysystemd`, `dbus-python` (`.[native]` — faster journal/DBus access; falls back to `journalctl`/`systemctl` when absent).
-*   **(Optional Extras)** `networkx` (`.[full-graph]`); `pandas`, `scikit-learn`, `tensorflow`, `joblib` (`.[ml]`); `ollama` (`.[llm]`); `openai` (`.[openai]`); `prometheus-client` (`.[exporter]`); `bcc` (`.[ebpf]`, system package).
+*   **(Optional Extras)** `networkx` (`.[full-graph]`); `pandas`, `scikit-learn`, `tensorflow`, `joblib` (`.[ml]`); `ollama` (`.[llm]`); `openai` (`.[openai]`); `prometheus-client` (`.[exporter]`). eBPF tracing needs the distro BCC bindings (`python3-bpfcc` / `python3-bcc`), not pip — the `.[ebpf]` group is documentation-only; see Prerequisites.
 
 *   **(Optional for eBPF Tracing)**: Enabling the `--enable-ebpf` flag has specific system requirements:
-    1.  **BCC (BPF Compiler Collection):** The `bcc` library and tools must be installed.
+    1.  **BCC (BPF Compiler Collection):** The BCC Python bindings must be installed **from your distribution** — `python3-bpfcc` on Debian/Ubuntu, `python3-bcc` on Fedora. They are **not** on PyPI, so `pip install '.[ebpf]'` does not provide them (that extra is documentation-only). If you use a virtualenv, create it with `--system-site-packages` so the `bcc` module is importable.
     2.  **Kernel Headers:** You must have the kernel headers matching your currently running kernel.
     3.  **Root Privileges:** The feature must be run with `sudo` or as root.
 
     **Example Installation:**
     *   **Debian / Ubuntu:**
         ```bash
-        sudo apt update && sudo apt install -y bpfcc-tools libbpfcc-dev linux-headers-$(uname -r)
+        sudo apt update && sudo apt install -y python3-bpfcc bpfcc-tools libbpfcc-dev linux-headers-$(uname -r)
         ```
     *   **Fedora / CentOS Stream / RHEL:**
         ```bash
-        sudo dnf install -y bcc bcc-devel kernel-devel
+        sudo dnf install -y python3-bcc bcc bcc-devel kernel-devel
         ```
 
 ## Configuration (Optional)

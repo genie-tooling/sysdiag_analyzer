@@ -16,6 +16,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `requires-python` is now `>=3.11`, matching the CI matrix (3.11–3.13); dropped the
   `tomli` dependency in favour of the stdlib `tomllib`.
 - Fixed placeholder project metadata (author, homepage, bug tracker).
+- The `[ebpf]` extra no longer depends on the unrelated PyPI `bcc` package. BCC's
+  Python bindings are only available from the distro (`python3-bpfcc` /
+  `python3-bcc`), so `[ebpf]` is now a documentation-only group and the README /
+  MAN page point at the correct system packages.
 
 ### Added
 - **OpenAI-compatible LLM provider.** `provider = "openai"` / `"openai-compatible"`
