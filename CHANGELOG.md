@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-06-03
+
+### Added
+- **Per-unit memory limits & utilization.** Resource analysis now reads each unit's
+  cgroup `memory.max` and `memory.high` alongside `memory.current`. The rich report's
+  Top Memory Consumers table gains **Limit (max)** and **% Limit** columns — `none`
+  flags a cgroup with no hard limit, and the percentage turns yellow/red as usage
+  approaches the cap. `UnitResourceUsage` gains `memory_max_bytes` / `memory_high_bytes`
+  and a `memory_percent_of_limit` property.
+- **Exporter metrics** `sysdiag_analyzer_unit_memory_current_bytes`,
+  `…_unit_memory_max_bytes`, and `…_unit_memory_high_bytes` (labelled by `unit`),
+  emitted for units that have a configured limit or are among the top memory consumers.
+  A unit with a `current` series but no `max` series is one whose growth is uncapped —
+  useful for spotting e.g. a `virtiofsd`/VM scope that escaped its intended `MemoryMax`.
+
 ## [0.9.0] - 2026-06-03
 
 ### Packaging

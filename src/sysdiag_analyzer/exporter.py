@@ -191,6 +191,23 @@ class SysdiagCollector:
             "Total number of times a specific log pattern (e.g., segfault, oom-killer) has been detected.",
             labels=["pattern_key", "level"],
         )
+        unit_mem_current = GaugeMetricFamily(
+            f"{METRICS_PREFIX}unit_memory_current_bytes",
+            "Current memory usage (cgroup memory.current) of a systemd unit. Emitted for units "
+            "with a configured limit or among the top memory consumers.",
+            labels=["unit"],
+        )
+        unit_mem_max = GaugeMetricFamily(
+            f"{METRICS_PREFIX}unit_memory_max_bytes",
+            "Hard memory limit (cgroup memory.max / MemoryMax) of a systemd unit. The series is "
+            "absent when the unit has no hard limit ('max') — i.e. nothing caps its growth.",
+            labels=["unit"],
+        )
+        unit_mem_high = GaugeMetricFamily(
+            f"{METRICS_PREFIX}unit_memory_high_bytes",
+            "Soft memory limit (cgroup memory.high / MemoryHigh) of a systemd unit; absent when unset.",
+            labels=["unit"],
+        )
 
         with self.lock:
             report = self.cached_report
@@ -243,6 +260,33 @@ class SysdiagCollector:
                 yield child_group_mem
             if child_group_cpu.samples:
                 yield child_group_cpu
+
+        # --- Per-unit cgroup memory + limits ---
+        # Bounded to units that either have an explicit limit (so utilization can be
+        # alerted on) or are among the top memory consumers (so an unlimited, runaway
+        # cgroup is still visible). This avoids series churn from transient scopes.
+        if report.resource_analysis and report.resource_analysis.unit_usage:
+            res = report.resource_analysis
+            top_names = {u.name for u in (res.top_memory_units or [])}
+            emitted: set = set()
+            for unit in res.unit_usage:
+                if unit.memory_current_bytes is None or unit.name in emitted:
+                    continue
+                has_limit = unit.memory_max_bytes is not None or unit.memory_high_bytes is not None
+                if not has_limit and unit.name not in top_names:
+                    continue
+                emitted.add(unit.name)
+                unit_mem_current.add_metric([unit.name], unit.memory_current_bytes)
+                if unit.memory_max_bytes is not None:
+                    unit_mem_max.add_metric([unit.name], unit.memory_max_bytes)
+                if unit.memory_high_bytes is not None:
+                    unit_mem_high.add_metric([unit.name], unit.memory_high_bytes)
+            if unit_mem_current.samples:
+                yield unit_mem_current
+            if unit_mem_max.samples:
+                yield unit_mem_max
+            if unit_mem_high.samples:
+                yield unit_mem_high
 
         # --- Log Metrics ---
         if report.log_analysis and report.log_analysis.detected_patterns:

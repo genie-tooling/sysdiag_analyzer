@@ -116,10 +116,23 @@ class UnitResourceUsage:
     cpu_usage_nsec: Optional[int] = None
     memory_current_bytes: Optional[int] = None
     memory_peak_bytes: Optional[int] = None
+    # cgroup memory limits. None means "max" (unlimited) or not readable.
+    memory_max_bytes: Optional[int] = None   # memory.max (hard limit / MemoryMax)
+    memory_high_bytes: Optional[int] = None  # memory.high (soft throttle / MemoryHigh)
     io_read_bytes: Optional[int] = None
     io_write_bytes: Optional[int] = None
     tasks_current: Optional[int] = None
     error: Optional[str] = None
+
+    @property
+    def memory_percent_of_limit(self) -> Optional[float]:
+        """Current memory as a percentage of the hard limit (memory.max).
+
+        None when there is no usage reading or no finite limit (unlimited).
+        """
+        if self.memory_current_bytes is None or not self.memory_max_bytes:
+            return None
+        return (self.memory_current_bytes / self.memory_max_bytes) * 100.0
 
 
 @dataclass

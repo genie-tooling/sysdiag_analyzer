@@ -652,6 +652,13 @@ def get_unit_resource_usage(
         usage.memory_peak_bytes = _parse_cgroup_memory(mem_peak_content)
         if usage.memory_peak_bytes is None and mem_peak_content is not None:
             log_cgroup.debug(f"Failed to parse memory.peak for {unit_name}")
+        # cgroup memory limits. _parse_cgroup_memory maps the literal "max" to
+        # None, which we treat as "unlimited" — so a None limit here means no
+        # effective MemoryMax/MemoryHigh is in force for this unit.
+        mem_max_content = _read_cgroup_file(full_cgroup_path / "memory.max")
+        mem_high_content = _read_cgroup_file(full_cgroup_path / "memory.high")
+        usage.memory_max_bytes = _parse_cgroup_memory(mem_max_content)
+        usage.memory_high_bytes = _parse_cgroup_memory(mem_high_content)
         log_cgroup.debug(
             f"Calling _parse_cgroup_io_stat for {unit_name} with content (snippet): {io_stat_content[:100] if io_stat_content else 'None'}..."
         )

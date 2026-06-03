@@ -70,10 +70,23 @@ def mock_full_system_report():
         ),
         resource_analysis=ResourceAnalysisResult(
             unit_usage=[
-                UnitResourceUsage(name="app.service", cpu_usage_nsec=123450000000)
+                UnitResourceUsage(
+                    name="app.service",
+                    cpu_usage_nsec=123450000000,
+                    memory_current_bytes=100 * 1024 * 1024,
+                    memory_max_bytes=200 * 1024 * 1024,  # -> 50% of limit
+                    memory_high_bytes=150 * 1024 * 1024,
+                ),
+                UnitResourceUsage(
+                    name="machine-qemu.scope",
+                    memory_current_bytes=500 * 1024 * 1024,  # no limit set
+                ),
             ],
             top_cpu_units=[
                 UnitResourceUsage(name="app.service", cpu_usage_nsec=123450000000)
+            ],
+            top_memory_units=[
+                UnitResourceUsage(name="machine-qemu.scope", memory_current_bytes=500 * 1024 * 1024)
             ],
             child_process_groups=[
                 ChildProcessGroupUsage(
@@ -149,6 +162,9 @@ def test_collector_collect_with_full_report(mock_config, mock_full_system_report
         "sysdiag_analyzer_child_process_group_memory_bytes",
         "sysdiag_analyzer_child_process_group_cpu_seconds",
         "sysdiag_analyzer_log_patterns_detected",
+        "sysdiag_analyzer_unit_memory_current_bytes",
+        "sysdiag_analyzer_unit_memory_max_bytes",
+        "sysdiag_analyzer_unit_memory_high_bytes",
     ]
     for name in expected_metric_names:
         assert name in metrics_by_name, f"Metric '{name}' was not yielded"
@@ -196,6 +212,17 @@ def test_collector_collect_with_full_report(mock_config, mock_full_system_report
     sample = child_cpu_metric.samples[0]
     assert sample.labels == {"parent_unit": "app.service", "command_name": "worker.py"}
     assert sample.value == 123.45
+
+    # --- Verify Per-Unit Memory + Limits ---
+    mem_cur = metrics_by_name["sysdiag_analyzer_unit_memory_current_bytes"]
+    cur_by_unit = {s.labels["unit"]: s.value for s in mem_cur.samples}
+    assert cur_by_unit["app.service"] == 100 * 1024 * 1024          # has a limit
+    assert cur_by_unit["machine-qemu.scope"] == 500 * 1024 * 1024   # surfaced as top consumer
+    mem_max = metrics_by_name["sysdiag_analyzer_unit_memory_max_bytes"]
+    max_by_unit = {s.labels["unit"]: s.value for s in mem_max.samples}
+    assert max_by_unit == {"app.service": 200 * 1024 * 1024}
+    # The unlimited scope has NO max series -> exactly the "no hard limit" signal.
+    assert "machine-qemu.scope" not in max_by_unit
 
     # --- Verify Log Patterns ---
     log_metric = metrics_by_name["sysdiag_analyzer_log_patterns_detected"]

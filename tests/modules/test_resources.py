@@ -269,6 +269,10 @@ def test_get_unit_resource_usage_success(mock_get_cgroup_path, mock_read_file, m
                 return MOCK_MEM_CURRENT_CONTENT
             if filename == "memory.peak":
                 return MOCK_MEM_PEAK_CONTENT
+            if filename == "memory.max":
+                return "209715200"  # 200 MiB hard limit (current is 100 MiB -> 50%)
+            if filename == "memory.high":
+                return "max"  # no soft limit -> None
             if filename == "io.stat":
                 return MOCK_IO_STAT_CONTENT
             if filename == "cgroup.procs":
@@ -280,6 +284,8 @@ def test_get_unit_resource_usage_success(mock_get_cgroup_path, mock_read_file, m
                return "209715200"
             if filename == "memory.peak":
                return "209715200"
+            if filename == "memory.max":
+                return "max"  # unlimited -> no hard limit
             if filename == "io.stat":
                 return "rbytes=10000 wbytes=20000"
             if filename == "cgroup.procs":
@@ -315,6 +321,15 @@ def test_get_unit_resource_usage_success(mock_get_cgroup_path, mock_read_file, m
     assert unit_a_res.io_read_bytes == 52428800
     assert unit_a_res.io_write_bytes == 10485760
     assert unit_a_res.tasks_current == 3
+    # Memory limits: unitA has a 200 MiB hard limit (current 100 MiB -> 50%),
+    # no soft limit ("max" -> None).
+    assert unit_a_res.memory_max_bytes == 209715200
+    assert unit_a_res.memory_high_bytes is None
+    assert unit_a_res.memory_percent_of_limit == pytest.approx(50.0)
+    # unitB is unlimited ("max"), so no hard limit and no utilization figure.
+    unit_b_res = next(r for r in results if r.name == "unitB.service")
+    assert unit_b_res.memory_max_bytes is None
+    assert unit_b_res.memory_percent_of_limit is None
 
 # --- Tests for Main Orchestrator (modified to pass unit list) ---
 @pytest.mark.skipif(not HAS_DBUS_FOR_TESTS, reason="dbus-python not installed")
@@ -426,3 +441,21 @@ def test_parse_cgroup_io_stat_single_device():
 def test_parse_cgroup_io_stat_empty_and_none():
     assert resources._parse_cgroup_io_stat("") == (0, 0)
     assert resources._parse_cgroup_io_stat(None) == (None, None)
+
+
+# --- Memory limit parsing + utilization ---
+
+def test_parse_cgroup_memory_max_means_unlimited():
+    # cgroup v2 limit files hold a number or the literal "max" (= unlimited).
+    assert resources._parse_cgroup_memory("max") is None
+    assert resources._parse_cgroup_memory("8589934592") == 8589934592
+    assert resources._parse_cgroup_memory(None) is None
+
+
+def test_memory_percent_of_limit_property():
+    u = UnitResourceUsage(name="x.scope", memory_current_bytes=50, memory_max_bytes=200)
+    assert u.memory_percent_of_limit == pytest.approx(25.0)
+    # No finite hard limit -> no utilization figure (the "no limit" case).
+    assert UnitResourceUsage(name="y", memory_current_bytes=50, memory_max_bytes=None).memory_percent_of_limit is None
+    # No usage reading -> None.
+    assert UnitResourceUsage(name="z", memory_current_bytes=None, memory_max_bytes=200).memory_percent_of_limit is None

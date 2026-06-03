@@ -539,14 +539,27 @@ def format_resource_report(
         table.add_column("Unit", style="magenta", no_wrap=True)
         table.add_column("Current Mem", style="blue", width=12, justify="right")
         table.add_column("Peak Mem", style="cyan", width=12, justify="right")
+        table.add_column("Limit (max)", style="blue", width=12, justify="right")
+        table.add_column("% Limit", width=8, justify="right")
         table.add_column("CPU Time", style="magenta", width=12, justify="right")
         table.add_column("Tasks", style="green", width=7, justify="right")
         table.add_column("Error", style="red")
         for unit in result.top_memory_units:
+            if unit.memory_max_bytes is None:
+                # No finite memory.max -> no hard limit is in force for this unit.
+                limit_str = "[dim]none[/dim]"
+                pct_str = "[dim]—[/dim]"
+            else:
+                limit_str = _format_bytes(unit.memory_max_bytes)
+                pct_val = unit.memory_percent_of_limit or 0.0
+                color = "red" if pct_val >= 90 else ("yellow" if pct_val >= 75 else "green")
+                pct_str = f"[{color}]{pct_val:.0f}%[/{color}]"
             table.add_row(
                 unit.name,
                 _format_bytes(unit.memory_current_bytes),
                 _format_bytes(unit.memory_peak_bytes),
+                limit_str,
+                pct_str,
                 _format_nanoseconds(unit.cpu_usage_nsec),
                 str(unit.tasks_current)
                 if unit.tasks_current is not None
