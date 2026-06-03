@@ -30,7 +30,7 @@ eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, pyth
 *   **Service Health Checks:** Failed/flapping units, socket/timer issues. (DBus/cysystemd preferred)
 *   **Resource Utilization Monitoring:**
     *   System-wide (psutil).
-    *   Per-unit (cgroup v2 via DBus). Top N consumers, including each unit's configured memory limits (`memory.max`/`memory.high`) and current usage as a **% of limit** — so a cgroup with *no* hard limit (or one pinned at its `MemoryMax`) is obvious at a glance.
+    *   Per-unit (cgroup v2). Cgroup paths are resolved via DBus when available, otherwise via a batched `systemctl` call — so per-unit data works **without `dbus-python`** (no compiler/`[native]` build required). Top N consumers, including each unit's configured memory limits (`memory.max`/`memory.high`) and current usage as a **% of limit** — so a cgroup with *no* hard limit (or one pinned at its `MemoryMax`) is obvious at a glance.
     *   **Child Process Group Monitoring:** Aggregates CPU/Memory for process groups not directly managed by systemd (e.g., Docker containers spawned by `docker.service`), linking them back to the parent unit. Useful for understanding resource usage of containerized workloads.
 *   **Log Analysis (Current Boot):** OOM Killer, common error/warning patterns (segfaults, I/O errors, etc.). (cysystemd preferred)
 *   **Dependency Analysis (Failed Units):** Checks dependencies of failed units to identify potential root causes.

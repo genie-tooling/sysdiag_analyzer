@@ -380,21 +380,19 @@ def test_analyze_resources_success(mock_get_pids, mock_scan_children, mock_get_u
 @patch('sysdiag_analyzer.modules.resources.HAS_DBUS', False)
 @patch('sysdiag_analyzer.modules.resources.get_system_wide_usage')
 @patch('sysdiag_analyzer.modules.resources.get_unit_resource_usage')
-@patch('sysdiag_analyzer.modules.resources._scan_and_group_child_processes')
+@patch('sysdiag_analyzer.modules.resources._scan_and_group_child_processes', return_value=[])
 @patch('sysdiag_analyzer.modules.resources._get_service_pids', return_value={})
-def test_analyze_resources_no_dbus_module(mock_get_pids, mock_scan_children, mock_get_unit_usage, mock_get_sys_usage):
-    """Tests analyze_resources when HAS_DBUS is False."""
+def test_analyze_resources_no_dbus_uses_fallback(mock_get_pids, mock_scan_children, mock_get_unit_usage, mock_get_sys_usage):
+    """Without DBus, per-unit collection is still attempted (get_unit_resource_usage
+    resolves cgroup paths via the batched systemctl fallback), not short-circuited."""
     mock_get_sys_usage.return_value = SystemResourceUsage()
-    # Call with mock unit list, dbus_manager=None
+    mock_get_unit_usage.return_value = [UnitResourceUsage(name="a.service", memory_current_bytes=1024)]
     result = resources.analyze_resources(units=MOCK_UNIT_INFO_LIST, dbus_manager=None)
 
-    assert result.analysis_error is not None
-    assert "DBus bindings not installed" in result.analysis_error
-    mock_get_unit_usage.assert_not_called()
-    assert result.unit_usage == []
-    assert result.top_cpu_units == []
-    mock_get_pids.assert_called_once_with(MOCK_UNIT_INFO_LIST, None) # PID lookup still attempted
-    mock_scan_children.assert_not_called() # Scan skipped because get_pids returned empty
+    mock_get_unit_usage.assert_called_once_with(MOCK_UNIT_INFO_LIST, None)
+    assert [u.name for u in result.unit_usage] == ["a.service"]
+    assert "DBus bindings not installed" not in (result.analysis_error or "")
+    mock_get_pids.assert_called_once_with(MOCK_UNIT_INFO_LIST, None)
 
 @pytest.mark.skipif(not HAS_DBUS_FOR_TESTS, reason="dbus-python not installed")
 @patch('sysdiag_analyzer.modules.resources.get_system_wide_usage')
@@ -459,3 +457,37 @@ def test_memory_percent_of_limit_property():
     assert UnitResourceUsage(name="y", memory_current_bytes=50, memory_max_bytes=None).memory_percent_of_limit is None
     # No usage reading -> None.
     assert UnitResourceUsage(name="z", memory_current_bytes=None, memory_max_bytes=200).memory_percent_of_limit is None
+
+
+# --- cgroup path resolution without DBus (batched systemctl fallback) ---
+
+@patch("sysdiag_analyzer.modules.resources.run_subprocess")
+def test_get_cgroup_paths_via_systemctl_batched(mock_run):
+    # Records mapped by Id (note the out-of-order record to prove it's not positional).
+    mock_run.return_value = (
+        True,
+        "Id=u.service\nControlGroup=/user.slice/u.service\n\n"
+        "Id=a.service\nControlGroup=/system.slice/a.service\n\n"
+        "Id=none.service\nControlGroup=\n",
+        "",
+    )
+    paths = resources._get_cgroup_paths_via_systemctl(["a.service", "u.service", "none.service"])
+    assert paths == {
+        "a.service": "system.slice/a.service",   # leading slash stripped (relative)
+        "u.service": "user.slice/u.service",
+        "none.service": None,                     # empty ControlGroup -> no path
+    }
+    assert mock_run.call_count == 1               # ONE batched call for all units
+    cmd = mock_run.call_args.args[0]
+    assert cmd[:2] == ["systemctl", "show"]
+    assert "--property=Id" in cmd and "--property=ControlGroup" in cmd
+    assert "a.service" in cmd and "none.service" in cmd
+
+
+@patch("sysdiag_analyzer.modules.resources._get_cgroup_paths_via_systemctl")
+@patch("sysdiag_analyzer.modules.resources.HAS_DBUS", False)
+def test_resolve_cgroup_paths_uses_systemctl_when_no_dbus(mock_systemctl):
+    mock_systemctl.return_value = {"a.service": "system.slice/a.service"}
+    out = resources._resolve_cgroup_paths(["a.service"], dbus_manager=None)
+    assert out == {"a.service": "system.slice/a.service"}
+    mock_systemctl.assert_called_once_with(["a.service"])

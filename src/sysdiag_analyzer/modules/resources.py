@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import psutil
 
+from ..utils import run_subprocess
+
 try:
     import dbus
     import dbus.exceptions  # Import exceptions submodule
@@ -361,6 +363,54 @@ def _get_unit_cgroup_path(unit_name: str, dbus_manager: Optional[Any]) -> Option
         return None
 
 
+def _get_cgroup_paths_via_systemctl(unit_names: List[str]) -> Dict[str, Optional[str]]:
+    """Resolve unit -> relative cgroup path without DBus, via ONE batched
+    `systemctl show -p ControlGroup` call.
+
+    Mirrors the DBus path handling: the leading slash is stripped and an empty
+    ControlGroup becomes None. `systemctl show` emits one "ControlGroup=<path>"
+    line per requested unit, in argument order.
+    """
+    paths: Dict[str, Optional[str]] = {name: None for name in unit_names}
+    if not unit_names:
+        return paths
+    # Request Id alongside ControlGroup so we can map each record by unit name
+    # (robust to ordering / units systemctl skips), rather than by position.
+    cmd = [
+        "systemctl", "show", "--property=Id", "--property=ControlGroup", "--"
+    ] + list(unit_names)
+    success, stdout, stderr = run_subprocess(cmd)
+    if not success:
+        log_cgroup.warning(f"systemctl ControlGroup fallback failed: {stderr or stdout}")
+        return paths
+    # `systemctl show` emits one blank-line-separated record per unit.
+    for record in stdout.split("\n\n"):
+        rec_id: Optional[str] = None
+        rec_cgroup: Optional[str] = None
+        for line in record.splitlines():
+            if line.startswith("Id="):
+                rec_id = line[len("Id="):].strip()
+            elif line.startswith("ControlGroup="):
+                rec_cgroup = line.split("=", 1)[1].strip()
+        if rec_id and rec_id in paths:
+            paths[rec_id] = (rec_cgroup or "").lstrip("/") or None
+    return paths
+
+
+def _resolve_cgroup_paths(
+    unit_names: List[str], dbus_manager: Optional[Any]
+) -> Dict[str, Optional[str]]:
+    """Resolve cgroup paths for many units. Uses DBus per unit when available,
+    otherwise a single batched `systemctl show` call (no dbus-python required)."""
+    dbus_ok = (
+        HAS_DBUS and dbus and dbus_manager is not None and hasattr(dbus_manager, "bus")
+    )
+    if dbus_ok:
+        return {name: _get_unit_cgroup_path(name, dbus_manager) for name in unit_names}
+    log_cgroup.debug("DBus unavailable; resolving cgroup paths via systemctl fallback.")
+    return _get_cgroup_paths_via_systemctl(unit_names)
+
+
 def _get_service_pids(
     units: List[UnitHealthInfo], dbus_manager: Optional[Any]
 ) -> Dict[str, Optional[int]]:
@@ -625,16 +675,19 @@ def get_unit_resource_usage(
             f"Cgroup base path {CGROUP_BASE_PATH} not found. Cannot collect per-unit cgroup stats."
         )
         return results
+
+    # Resolve cgroup paths up front (cached across calls when a cache is given):
+    # DBus per unit when available, else ONE batched `systemctl show` call.
+    resolved = cgroup_path_cache if cgroup_path_cache is not None else {}
+    missing = [u.name for u in units if u.name not in resolved]
+    if missing:
+        resolved.update(_resolve_cgroup_paths(missing, dbus_manager))
+
     for unit_info in units:
         unit_name = unit_info.name
         usage = UnitResourceUsage(name=unit_name)
         error_parts = []
-        if cgroup_path_cache is not None and unit_name in cgroup_path_cache:
-            relative_cgroup_path = cgroup_path_cache[unit_name]
-        else:
-            relative_cgroup_path = _get_unit_cgroup_path(unit_name, dbus_manager)
-            if cgroup_path_cache is not None:
-                cgroup_path_cache[unit_name] = relative_cgroup_path
+        relative_cgroup_path = resolved.get(unit_name)
         if not relative_cgroup_path:
             log_cgroup.debug(
                 f"Skipping cgroup resource collection for {unit_name}: No cgroup path found."
@@ -742,29 +795,11 @@ def analyze_resources(
         )
         # Set unit_usage to empty list if no units provided
         result.unit_usage = []
-    elif not HAS_DBUS:
-        log.warning(
-            "DBus bindings not installed, cannot perform per-unit resource analysis via cgroups."
-        )
-        err_msg = "DBus bindings not installed"
-        result.analysis_error = (
-            f"{result.analysis_error}; {err_msg}" if result.analysis_error else err_msg
-        )
-        result.unit_usage = []
-    elif not dbus_manager:
-        # Check if dbus is installed but manager connection failed earlier
-        log.warning(
-            "DBus manager connection unavailable, cannot perform per-unit resource analysis via cgroups."
-        )
-        err_msg = "DBus manager unavailable for cgroup lookup"
-        result.analysis_error = (
-            f"{result.analysis_error}; {err_msg}" if result.analysis_error else err_msg
-        )
-        result.unit_usage = []
     else:
-        # Proceed only if units and dbus manager are available
+        # Per-unit cgroup usage. get_unit_resource_usage resolves cgroup paths via
+        # DBus when available, otherwise a single batched `systemctl show` call,
+        # so this works even without dbus-python (it just needs cgroup read access).
         try:
-            # Pass the provided units list and manager
             result.unit_usage = get_unit_resource_usage(units, dbus_manager)
         except Exception as e:
             log.exception("Unexpected error getting per-unit resource usage.")

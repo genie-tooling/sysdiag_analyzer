@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-06-03
+
+### Changed
+- **Per-unit cgroup data no longer requires `dbus-python`.** `get_unit_resource_usage`
+  resolves each unit's cgroup path via DBus when available, otherwise via a single
+  batched `systemctl show -p Id -p ControlGroup` call. So `analyze-resources`, `run`,
+  and `top` show per-unit memory / limits / CPU / I/O with just `systemctl` access —
+  no compiler or `[native]` build needed (which previously failed on, e.g., uv's
+  standalone Python). DBus remains a marginally faster option for the one-time path
+  resolution, and the result is cached for live refresh (`top`). `analyze_resources`
+  no longer short-circuits per-unit collection when DBus is absent.
+
 ## [0.12.0] - 2026-06-03
 
 ### Added
