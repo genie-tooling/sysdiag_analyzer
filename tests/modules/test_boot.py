@@ -130,6 +130,18 @@ def assert_chain_item_match(parsed: CriticalChainItem, expected: CriticalChainIt
     pytest.param(SAMPLE_ANALYZE_TIMES_OUTPUT_MINIMAL, BootTimes(firmware=None, loader=None, kernel="5.123s", initrd=None, userspace="10.456s", total="15.579s", error=None), id="minimal_output"),
     pytest.param(SAMPLE_ANALYZE_TIMES_OUTPUT_NO_MATCH, BootTimes(firmware=None, loader=None, kernel=None, initrd=None, userspace=None, total=None, error="Failed to determine boot times from output."), id="no_match"), # Error msg updated
     pytest.param("", BootTimes(firmware=None, loader=None, kernel=None, initrd=None, userspace=None, total=None, error="Failed to determine boot times from output."), id="empty_output"), # Error msg updated
+    # Compound systemd durations (min/ms) — the format real hosts emit when boot
+    # is slow. The old single-token regex failed to match these entirely.
+    pytest.param(
+        "Startup finished in 10.951s (firmware) + 3.158s (loader) + 696ms (kernel) + 24.497s (initrd) + 1min 21.085s (userspace) = 2min 389ms",
+        BootTimes(firmware="10.951s", loader="3.158s", kernel="696ms", initrd="24.497s", userspace="1min 21.085s", total="2min 389ms", error=None),
+        id="compound_min_ms",
+    ),
+    pytest.param(
+        "Startup finished in 696ms (kernel) + 5.5s (userspace) = 6.196s",
+        BootTimes(firmware=None, loader=None, kernel="696ms", initrd=None, userspace="5.5s", total="6.196s", error=None),
+        id="ms_and_seconds",
+    ),
 ])
 def test_parse_boot_times_from_analyze_output(stdout: str, expected: BootTimes):
     # Simulates the parsing loop within _get_boot_times_sync
@@ -308,7 +320,7 @@ def test_get_boot_blame_journal_fallback(mock_run_subprocess):
     assert len(blame_list) == len(EXPECTED_BLAME_ITEMS)
     assert set((i.unit, i.time) for i in blame_list) == set((i.unit, i.time) for i in EXPECTED_BLAME_ITEMS)
     assert blame_list == EXPECTED_BLAME_ITEMS
-    expected_cmd = ["journalctl", "-b", "0", "-o", "json", "--output-fields=__REALTIME_TIMESTAMP,_SYSTEMD_UNIT,MESSAGE"]
+    expected_cmd = ["journalctl", "-b", "0", "-o", "json", "--grep", "(Starting|Started) ", "--output-fields=__REALTIME_TIMESTAMP,_SYSTEMD_UNIT,MESSAGE"]
     mock_run_subprocess.assert_called_once_with(expected_cmd)
 
 # Correct the patch target to sysdiag_analyzer.modules.boot.HAS_NATIVE_JOURNAL

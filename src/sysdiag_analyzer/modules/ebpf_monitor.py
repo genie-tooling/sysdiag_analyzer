@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 
 import logging
+import os
 import time
 import ctypes as ct
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
 
 # Conditional BCC import
 try:
@@ -120,6 +122,65 @@ class ExitData(ct.Structure):
     ]
 
 
+# --- cgroup id -> systemd unit resolution & event aggregation ---
+
+CGROUP_BASE_PATH = Path("/sys/fs/cgroup")
+_UNIT_SUFFIXES = (
+    ".service", ".scope", ".socket", ".target",
+    ".mount", ".swap", ".slice", ".timer", ".path",
+)
+
+
+def _derive_unit_from_cgroup_path(rel_parts: Iterable[str]) -> Optional[str]:
+    """Return the deepest path component that looks like a systemd unit."""
+    for part in reversed(list(rel_parts)):
+        if part.endswith(_UNIT_SUFFIXES):
+            return part
+    return None
+
+
+def _build_cgroup_inode_map(cgroup_base: Path = CGROUP_BASE_PATH) -> Dict[int, str]:
+    """
+    Map cgroup directory inode -> owning systemd unit name.
+
+    On cgroup v2, bpf_get_current_cgroup_id() returns the kernfs id of the
+    cgroup directory, which equals that directory's inode number. Walking the
+    hierarchy once lets us translate the cgroup_id captured per event into the
+    systemd unit that owns it.
+    """
+    mapping: Dict[int, str] = {}
+    if not cgroup_base.is_dir():
+        return mapping
+    for root, _dirs, _files in os.walk(cgroup_base):
+        rp = Path(root)
+        try:
+            ino = rp.stat().st_ino
+        except OSError:
+            continue
+        try:
+            rel_parts = rp.relative_to(cgroup_base).parts
+        except ValueError:
+            rel_parts = rp.parts
+        unit = _derive_unit_from_cgroup_path(rel_parts)
+        if unit:
+            mapping[ino] = unit
+    return mapping
+
+
+def _aggregate_events_by_unit(
+    events: Iterable[Any], inode_map: Dict[int, str]
+) -> Dict[str, int]:
+    """Count events per owning unit, resolving cgroup_id via inode_map."""
+    counts: Dict[str, int] = {}
+    for ev in events:
+        cid = getattr(ev, "cgroup_id", None)
+        unit = inode_map.get(cid) if cid is not None else None
+        if not unit:
+            unit = f"cgroup:{cid}" if cid else "unknown"
+        counts[unit] = counts.get(unit, 0) + 1
+    return counts
+
+
 # --- eBPF Collector Class ---
 
 class EBPFCollector:
@@ -224,8 +285,19 @@ class EBPFCollector:
         self.bpf = None
         result.exec_events = self.exec_events
         result.exit_events = self.exit_events
-        # TODO: Add aggregation logic here (e.g., count events per cgroup/unit)
-        log.info(f"eBPF monitoring stopped. Collected {len(result.exec_events)} execs, {len(result.exit_events)} exits.")
+
+        # Aggregate events per owning systemd unit (resolved from cgroup id).
+        try:
+            inode_map = _build_cgroup_inode_map()
+            result.units_with_execs = _aggregate_events_by_unit(self.exec_events, inode_map)
+            result.units_with_exits = _aggregate_events_by_unit(self.exit_events, inode_map)
+        except Exception as e:
+            log.error(f"Failed to aggregate eBPF events by unit: {e}", exc_info=True)
+
+        log.info(
+            f"eBPF monitoring stopped. Collected {len(result.exec_events)} execs, "
+            f"{len(result.exit_events)} exits across {len(result.units_with_execs)} unit(s)."
+        )
         return result
 
 # --- Module Level Function (Optional Simplification) ---

@@ -56,8 +56,8 @@ throttled_usec 0
 """
 MOCK_MEM_CURRENT_CONTENT = "104857600" # 100 MiB
 MOCK_MEM_PEAK_CONTENT = "157286400" # 150 MiB
-MOCK_IO_STAT_CONTENT = """rbytes=52428800 wbytes=10485760 rios=1000 wios=500 dbytes=0 dios=0
-""" # 50 MiB read, 10 MiB write (Corrected format)
+MOCK_IO_STAT_CONTENT = """8:0 rbytes=52428800 wbytes=10485760 rios=1000 wios=500 dbytes=0 dios=0
+""" # 50 MiB read, 10 MiB write (real cgroup v2 per-device line)
 MOCK_CGROUP_PROCS_CONTENT = """1234
 5678
 9012
@@ -216,6 +216,7 @@ def test_get_unit_cgroup_path_success(mock_dbus_for_cgroup):
     props_iface_mock.Get.assert_called_once_with('org.freedesktop.systemd1.Service', 'ControlGroup')
 
 # --- Tests for Per-Unit Usage ---
+@pytest.mark.skipif(not HAS_DBUS_FOR_TESTS, reason="dbus-python not installed")
 @patch('sysdiag_analyzer.modules.resources.CGROUP_BASE_PATH', new_callable=MagicMock)
 @patch('sysdiag_analyzer.modules.resources.Path')
 @patch('sysdiag_analyzer.modules.resources._read_cgroup_file')
@@ -316,6 +317,7 @@ def test_get_unit_resource_usage_success(mock_get_cgroup_path, mock_read_file, m
     assert unit_a_res.tasks_current == 3
 
 # --- Tests for Main Orchestrator (modified to pass unit list) ---
+@pytest.mark.skipif(not HAS_DBUS_FOR_TESTS, reason="dbus-python not installed")
 @patch('sysdiag_analyzer.modules.resources.get_system_wide_usage')
 @patch('sysdiag_analyzer.modules.resources.get_unit_resource_usage')
 @patch('sysdiag_analyzer.modules.resources._scan_and_group_child_processes', return_value=[])
@@ -379,6 +381,7 @@ def test_analyze_resources_no_dbus_module(mock_get_pids, mock_scan_children, moc
     mock_get_pids.assert_called_once_with(MOCK_UNIT_INFO_LIST, None) # PID lookup still attempted
     mock_scan_children.assert_not_called() # Scan skipped because get_pids returned empty
 
+@pytest.mark.skipif(not HAS_DBUS_FOR_TESTS, reason="dbus-python not installed")
 @patch('sysdiag_analyzer.modules.resources.get_system_wide_usage')
 @patch('sysdiag_analyzer.modules.resources.get_unit_resource_usage')
 @patch('sysdiag_analyzer.modules.resources._scan_and_group_child_processes')
@@ -399,3 +402,27 @@ def test_analyze_resources_no_units_provided(mock_get_pids, mock_scan_children, 
     assert result.top_cpu_units == []
     mock_get_pids.assert_called_once_with([], manager_iface_mock) # Called with empty list
     mock_scan_children.assert_not_called() # Scan skipped
+
+
+# --- Direct tests for io.stat parsing (regression: real cgroup v2 format) ---
+
+def test_parse_cgroup_io_stat_real_device_lines():
+    """Real cgroup v2 io.stat is one 'major:minor ...' line per device; the
+    rbytes/wbytes counters live on those lines and must be summed across them."""
+    content = (
+        "8:0 rbytes=1073741824 wbytes=536870912 rios=1000 wios=500 dbytes=0 dios=0\n"
+        "259:0 rbytes=2147483648 wbytes=1073741824 rios=2000 wios=900 dbytes=0 dios=0\n"
+    )
+    rbytes, wbytes = resources._parse_cgroup_io_stat(content)
+    assert rbytes == 1073741824 + 2147483648
+    assert wbytes == 536870912 + 1073741824
+
+
+def test_parse_cgroup_io_stat_single_device():
+    content = "8:0 rbytes=52428800 wbytes=10485760 rios=1000 wios=500 dbytes=0 dios=0\n"
+    assert resources._parse_cgroup_io_stat(content) == (52428800, 10485760)
+
+
+def test_parse_cgroup_io_stat_empty_and_none():
+    assert resources._parse_cgroup_io_stat("") == (0, 0)
+    assert resources._parse_cgroup_io_stat(None) == (None, None)

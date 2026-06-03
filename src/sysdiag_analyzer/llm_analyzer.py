@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import abc
+import os
 from pathlib import Path # Import Path
 from typing import Optional, Dict, Any, Tuple
 
@@ -13,6 +14,15 @@ try:
 except ImportError:
     HAS_OLLAMA = False
     ollama = None # type: ignore
+
+# Conditional import for OpenAI-compatible backends (OpenAI, vLLM, llama.cpp,
+# LocalAI, etc. — anything exposing the /v1/chat/completions API).
+try:
+    import openai
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
+    openai = None # type: ignore
 
 # Local imports
 from .datatypes import SystemReport, LLMAnalysisResult
@@ -51,6 +61,14 @@ class LLMProvider(abc.ABC):
                 log_llm.error("Ollama provider requested, but 'ollama' library is not installed.")
                 return None
             return OllamaProvider(model, config)
+        elif provider_name in ("openai", "openai-compatible"):
+            if not HAS_OPENAI:
+                log_llm.error(
+                    "OpenAI-compatible provider requested, but the 'openai' library is not installed "
+                    "(install with 'pip install sysdiag-analyzer[openai]')."
+                )
+                return None
+            return OpenAICompatibleProvider(model, config)
         else:
             log_llm.error(f"Unsupported LLM provider specified: {provider_name}")
             return None
@@ -107,6 +125,56 @@ class OllamaProvider(LLMProvider):
             return None, None, err_msg
         except Exception as e:
             err_msg = f"Error communicating with Ollama: {e}"
+            log_llm.exception(err_msg)
+            return None, None, err_msg
+
+
+class OpenAICompatibleProvider(LLMProvider):
+    """Provider for any OpenAI-compatible /v1/chat/completions endpoint.
+
+    Works with OpenAI itself and local servers like vLLM, llama.cpp's server,
+    and LocalAI. Config keys: ``host`` (optional base_url, e.g.
+    ``http://localhost:8000/v1``) and ``api_key`` (falls back to the
+    ``OPENAI_API_KEY`` env var, then a placeholder for keyless local servers).
+    """
+
+    def generate(self, prompt: str, temperature: float, max_tokens: int, context_window: int) -> Tuple[Optional[str], Optional[Dict[str, int]], Optional[str]]:
+        if not openai:
+            return None, None, "openai library not available."
+
+        base_url = self.config.get("host")
+        api_key = self.config.get("api_key") or os.environ.get("OPENAI_API_KEY") or "not-needed"
+        client_args: Dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_args["base_url"] = base_url
+
+        try:
+            client = openai.OpenAI(**client_args)
+            log_llm.info(f"Sending request to OpenAI-compatible model '{self.model}' (base_url: {base_url or 'default'})...")
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
+            synthesis = response.choices[0].message.content if response.choices else None
+            if not synthesis:
+                return None, None, "OpenAI-compatible response did not contain any content."
+
+            token_usage = None
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                token_usage = {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                    "completion_tokens": getattr(usage, "completion_tokens", None),
+                }
+
+            log_llm.info("OpenAI-compatible generation successful.")
+            return synthesis.strip(), token_usage, None
+
+        except Exception as e:
+            err_msg = f"Error communicating with OpenAI-compatible endpoint: {e}"
             log_llm.exception(err_msg)
             return None, None, err_msg
 

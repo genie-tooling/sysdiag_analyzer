@@ -19,12 +19,15 @@ DEVICE_UNIT_PATTERN = re.compile(
 )
 
 
-def run_subprocess(command: List[str]) -> Tuple[bool, str, str]:
+def run_subprocess(command: List[str], timeout: Optional[float] = 60.0) -> Tuple[bool, str, str]:
     """
     Runs a subprocess synchronously and returns success status, stdout, and stderr.
 
     Args:
         command: A list representing the command and its arguments.
+        timeout: Maximum seconds to wait before killing the command and failing.
+                 Prevents a hung systemctl/journalctl/systemd-analyze from
+                 wedging the analysis. Pass None to wait indefinitely.
 
     Returns:
         A tuple containing:
@@ -38,6 +41,7 @@ def run_subprocess(command: List[str]) -> Tuple[bool, str, str]:
             capture_output=True,
             text=True,  # Decode stdout/stderr as text
             check=False,  # Don't raise exception on non-zero exit code
+            timeout=timeout,
         )
         if process.returncode == 0:
             log.debug(f"Command '{' '.join(command)}' succeeded.")
@@ -49,6 +53,9 @@ def run_subprocess(command: List[str]) -> Tuple[bool, str, str]:
             log.debug(f"Stderr: {process.stderr.strip()}")
             return False, process.stdout.strip(), process.stderr.strip()
 
+    except subprocess.TimeoutExpired:
+        log.error(f"Command '{' '.join(command)}' timed out after {timeout}s.")
+        return False, "", f"Command timed out after {timeout}s"
     except FileNotFoundError:
         log.error(f"Command not found: {command[0]}. Is it installed and in PATH?")
         return False, "", f"Command not found: {command[0]}"

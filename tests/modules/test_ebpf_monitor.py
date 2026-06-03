@@ -197,3 +197,42 @@ def test_handle_event_exception(mock_bpf_cls, caplog):
 #     assert len(result.exec_events) > 0
 #     # Assert sleep was called
 #     mock_sleep.assert_called()
+
+
+# --- Tests for cgroup-id -> unit aggregation (pure Python, no bcc required) ---
+
+def test_derive_unit_from_cgroup_path():
+    assert ebpf_monitor._derive_unit_from_cgroup_path(["system.slice", "foo.service"]) == "foo.service"
+    # Deepest unit component wins.
+    assert (
+        ebpf_monitor._derive_unit_from_cgroup_path(["user.slice", "user-1000.slice", "user@1000.service"])
+        == "user@1000.service"
+    )
+    assert ebpf_monitor._derive_unit_from_cgroup_path(["random", "nothing"]) is None
+
+
+def test_build_cgroup_inode_map(tmp_path):
+    svc = tmp_path / "system.slice" / "foo.service"
+    scope = tmp_path / "user.slice" / "session-1.scope"
+    svc.mkdir(parents=True)
+    scope.mkdir(parents=True)
+    m = ebpf_monitor._build_cgroup_inode_map(tmp_path)
+    assert m[svc.stat().st_ino] == "foo.service"
+    assert m[scope.stat().st_ino] == "session-1.scope"
+
+
+def test_build_cgroup_inode_map_missing_base(tmp_path):
+    assert ebpf_monitor._build_cgroup_inode_map(tmp_path / "nope") == {}
+
+
+def test_aggregate_events_by_unit():
+    inode_map = {111: "foo.service", 222: "bar.service"}
+    execs = [
+        EBPFExecEvent(timestamp_ns=1, pid=10, ppid=1, comm="a", cgroup_id=111, filename="/a"),
+        EBPFExecEvent(timestamp_ns=2, pid=11, ppid=1, comm="b", cgroup_id=111, filename="/b"),
+        EBPFExecEvent(timestamp_ns=3, pid=12, ppid=1, comm="c", cgroup_id=222, filename="/c"),
+        EBPFExecEvent(timestamp_ns=4, pid=13, ppid=1, comm="d", cgroup_id=999, filename="/d"),  # unmapped id
+        EBPFExecEvent(timestamp_ns=5, pid=14, ppid=1, comm="e", cgroup_id=None, filename="/e"),  # no cgroup
+    ]
+    counts = ebpf_monitor._aggregate_events_by_unit(execs, inode_map)
+    assert counts == {"foo.service": 2, "bar.service": 1, "cgroup:999": 1, "unknown": 1}

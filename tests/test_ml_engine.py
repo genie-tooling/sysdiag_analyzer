@@ -270,3 +270,105 @@ def test_detect_anomalies_success():
     assert anomalies[0].unit_name == unit_name
     assert anomalies[0].score > thresholds[sanitized_name]
     mock_model.predict.assert_called_once()
+
+
+# --- Real end-to-end pipeline test (no mocked worker / no mocked model) ---
+
+
+def _make_training_frame(unit_name, n):
+    """Builds a learnable, non-degenerate per-unit training frame."""
+    import math
+
+    rows = []
+    for i in range(n):
+        rows.append(
+            {
+                "unit_name": unit_name,
+                "cpu_usage_nsec": (2.0 + math.sin(i / 3.0)) * 1e9,
+                "mem_current_bytes": (100.0 + 10.0 * math.sin(i / 5.0)) * 1e6,
+                "mem_peak_bytes": (120.0 + 10.0 * math.sin(i / 5.0)) * 1e6,
+                "io_read_bytes": (10.0 + 2.0 * math.cos(i / 4.0)) * 1e6,
+                "io_write_bytes": (5.0 + 1.0 * math.sin(i / 6.0)) * 1e6,
+                "tasks_current": 5 + (i % 3),
+                "is_failed": False,
+                "is_flapping": False,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _reconstruction_score(frame, model, scaler):
+    """Mirror detect_anomalies' MAE computation for a single sequence."""
+    feats = list(scaler.feature_names_in_)
+    f = frame[feats].copy()
+    f[["is_failed", "is_flapping"]] = f[["is_failed", "is_flapping"]].astype(int)
+    scaled = scaler.transform(f.tail(ml_engine.LSTM_TIMESTEPS))
+    X = np.expand_dims(scaled, axis=0)
+    pred = model.predict(X, verbose=0)
+    return float(np.mean(np.abs(pred - X), axis=1).flatten()[0])
+
+
+def test_real_lstm_train_save_load_detect_roundtrip(temp_model_dir_path):
+    """
+    End-to-end with NO mocked worker or model: train a real LSTM autoencoder,
+    persist it, reload from disk, and verify inference discriminates between an
+    in-distribution sample (not flagged) and an out-of-distribution spike
+    (flagged, score above the learned threshold). A broken training/threshold/
+    inference pipeline cannot pass this; mock-only tests could.
+    """
+    keras.utils.set_random_seed(1234)
+
+    unit_name = "real-roundtrip.service"
+    n = ml_engine.MIN_SAMPLES_FOR_TRAINING + 20
+    engineered = ml_engine.engineer_features(_make_training_frame(unit_name, n))
+
+    # Train for real, serially, in-process (max_workers=1 -> no subprocess).
+    trained_count, skipped = ml_engine.train_anomaly_models(
+        engineered, temp_model_dir_path, max_workers=1
+    )
+    assert trained_count == 1, f"expected 1 trained model, got {trained_count}; skipped={skipped}"
+
+    sanitized = ml_engine._sanitize_filename(unit_name)
+    assert (temp_model_dir_path / sanitized / "model.keras").is_file()
+
+    # Reload fresh artifacts from disk (not the in-memory training objects).
+    models, scalers, thresholds = ml_engine.load_models(temp_model_dir_path)
+    assert sanitized in models and sanitized in scalers and sanitized in thresholds
+    threshold = thresholds[sanitized]
+    assert threshold >= ml_engine.MINIMUM_THRESHOLD
+
+    # In-distribution tail should reconstruct below threshold; spike far above.
+    normal_tail = engineered[engineered["unit_name"] == unit_name].tail(ml_engine.LSTM_TIMESTEPS)
+    spike_df = ml_engine.engineer_features(
+        pd.DataFrame(
+            [
+                {
+                    "unit_name": unit_name,
+                    "cpu_usage_nsec": 1e15,
+                    "mem_current_bytes": 1e15,
+                    "mem_peak_bytes": 1e15,
+                    "io_read_bytes": 1e15,
+                    "io_write_bytes": 1e15,
+                    "tasks_current": 1e6,
+                    "is_failed": True,
+                    "is_flapping": True,
+                }
+            ]
+            * ml_engine.LSTM_TIMESTEPS
+        )
+    )
+
+    model, scaler = models[sanitized], scalers[sanitized]
+    normal_score = _reconstruction_score(normal_tail, model, scaler)
+    spike_score = _reconstruction_score(spike_df, model, scaler)
+    assert normal_score < threshold < spike_score, (
+        f"model failed to discriminate: normal={normal_score:.4f}, "
+        f"threshold={threshold:.4f}, spike={spike_score:.4f}"
+    )
+
+    # Public detect_anomalies API must agree with the math above.
+    assert ml_engine.detect_anomalies(normal_tail.copy(), models, scalers, thresholds) == []
+    spike_anomalies = ml_engine.detect_anomalies(spike_df, models, scalers, thresholds)
+    assert len(spike_anomalies) == 1
+    assert spike_anomalies[0].unit_name == unit_name
+    assert spike_anomalies[0].score > threshold

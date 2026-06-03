@@ -63,7 +63,11 @@ except ImportError:
 HAS_NATIVE_JOURNAL = HAS_CYSYSTEMD or HAS_PYTHON_SYSTEMD
 
 # Patterns and Constants
-TIME_VALUE_PATTERN = r"[\d.]+\s?[a-z]+"
+# systemd prints durations as one or more "<number><unit>" tokens separated by
+# spaces, e.g. "10.951s", "696ms", "1min 21.085s", "2min 389ms", "1h 2min 3s".
+# Match a single token then any number of additional space-separated tokens.
+_TIME_TOKEN_PATTERN = r"\d+(?:\.\d+)?\s*(?:h|min|ms|us|s)"
+TIME_VALUE_PATTERN = r"(?:" + _TIME_TOKEN_PATTERN + r")(?:\s+" + _TIME_TOKEN_PATTERN + r")*"
 BOOT_TIME_LINE_PATTERN = re.compile(
     r"Startup finished in\s+"
     r"(?:(?P<firmware>" + TIME_VALUE_PATTERN + r")\s+\(firmware\)\s*\+?\s*)?"
@@ -215,8 +219,14 @@ def _get_boot_blame_journal() -> Tuple[List[BootBlameItem], Optional[str]]:
         if not native_attempted or error:
             log.debug("Using fallback: parsing 'journalctl -o json' output.")
             source_type = "journalctl"
+            # Filter to just the unit start/stop messages blame needs, server-side.
+            # Without this, `journalctl -b 0` streams the ENTIRE boot journal into
+            # memory (it is captured in full, then split), which can exhaust RAM on
+            # hosts with large journals. --grep narrows it to the handful of
+            # "Starting …"/"Started …" lines actually used below.
             command = [
                 "journalctl", "-b", "0", "-o", "json",
+                "--grep", "(Starting|Started) ",
                 "--output-fields=__REALTIME_TIMESTAMP,_SYSTEMD_UNIT,MESSAGE"
             ]
             success, stdout, stderr = run_subprocess(command)

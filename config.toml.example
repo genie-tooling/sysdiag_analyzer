@@ -5,16 +5,24 @@
 
 # --- LLM Analysis Configuration (Optional) ---
 [llm]
-# Specify the provider. Currently supported: "ollama"
+# Specify the provider. Supported: "ollama", "openai" / "openai-compatible".
 # provider = "ollama"
 
-# Model name available in your chosen provider instance (e.g., Ollama)
+# Model name available in your chosen provider instance
+# (e.g. "llama3:latest" for Ollama, "gpt-4o-mini" for OpenAI).
 # Required if provider is set.
 # model = "llama3:latest"
 
-# --- Ollama Specific Settings (Optional) ---
-# Override Ollama API host if not default (http://localhost:11434)
+# --- Endpoint Settings (Optional) ---
+# For "ollama": override the API host (default http://localhost:11434).
+# For "openai"/"openai-compatible": this is the base_url of the endpoint
+# (e.g. a local vLLM/llama.cpp/LocalAI server at http://localhost:8000/v1).
 # host = "http://192.168.1.100:11434"
+
+# API key for "openai"/"openai-compatible" providers. Falls back to the
+# OPENAI_API_KEY environment variable, then a placeholder for keyless local
+# servers. Not used by the "ollama" provider.
+# api_key = "sk-..."
 
 # --- General LLM Generation Parameters (Optional) ---
 # temperature = 0.2 # Controls randomness (0.0 = deterministic, >1.0 = more random)

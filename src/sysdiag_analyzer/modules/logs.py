@@ -124,7 +124,8 @@ def _update_pattern_counts(
 
 def analyze_general_logs(
     boot_offset: int = 0,
-    min_priority: int = DEFAULT_ANALYSIS_LEVEL
+    min_priority: int = DEFAULT_ANALYSIS_LEVEL,
+    since: Optional[str] = None,
 ) -> LogAnalysisResult:
     """
     Analyzes system logs from the specified boot for OOM events and common
@@ -133,11 +134,14 @@ def analyze_general_logs(
     Args:
         boot_offset: 0 for current boot, -1 for previous, etc.
         min_priority: Minimum syslog priority level to analyze (0=emerg to 7=debug).
+        since: Optional journalctl time spec (e.g. '1 hour ago'). When set, analysis
+               is restricted to entries since that time via the journalctl path
+               (native journal time-seeking is not implemented), overriding boot_offset.
 
     Returns:
         LogAnalysisResult containing findings.
     """
-    log.info(f"Starting general log analysis for boot {boot_offset} (min priority: {min_priority})...")
+    log.info(f"Starting general log analysis (boot {boot_offset}, min priority: {min_priority}, since: {since or 'n/a'})...")
     result = LogAnalysisResult()
     # Use regular dict now, defaultdict lambda was complex
     pattern_counts: Dict[str, LogPatternInfo] = {}
@@ -147,7 +151,9 @@ def analyze_general_logs(
     json_decode_errors_occurred = False # Flag for fallback JSON errors
 
     # --- Native Path (cysystemd preferred) ---
-    if HAS_NATIVE_JOURNAL:
+    # A `since` time filter is only supported via journalctl, so skip the native
+    # reader when it is set and fall through to the journalctl path below.
+    if HAS_NATIVE_JOURNAL and not since:
         native_attempted = True
         reader = None
         try:
@@ -253,8 +259,10 @@ def analyze_general_logs(
 
         # Construct command (journalctl handles priority filtering via -p)
         priority_range = f"{min_priority}..0" # journalctl uses .. syntax
+        # `--since` restricts by time (across boots); otherwise scope to a boot.
+        scope_args = ["--since", since] if since else [f"-b{boot_offset}"]
         command = [
-            "journalctl", f"-b{boot_offset}", f"-p{priority_range}",
+            "journalctl", *scope_args, f"-p{priority_range}",
             "-o", "json", "--no-pager",
             # Request specific fields needed for parsing and formatting
             "--output-fields=__REALTIME_TIMESTAMP,PRIORITY,MESSAGE,_SYSTEMD_UNIT,_PID"

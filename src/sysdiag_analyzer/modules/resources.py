@@ -3,7 +3,6 @@
 
 import logging
 import os
-import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -176,12 +175,17 @@ def _parse_cgroup_memory(content: Optional[str]) -> Optional[int]:
         return None
 
 
-IO_STAT_DEVICE_LINE_PATTERN = re.compile(r"^\d+:\d+\s+")
-
-
 def _parse_cgroup_io_stat(content: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
-    """Parses 'rbytes' and 'wbytes' from io.stat content."""
-    # (Logic remains the same)
+    """Parses and sums 'rbytes' and 'wbytes' from io.stat content.
+
+    cgroup v2 io.stat has one line per backing device, each prefixed with a
+    'major:minor' device id and carrying the rbytes=/wbytes= counters, e.g.::
+
+        8:0 rbytes=1073741824 wbytes=536870912 rios=1000 wios=500 dbytes=0 dios=0
+
+    There is no separate aggregate line, so the counters are summed across all
+    device lines.
+    """
     if content is None:
         log_cgroup.debug("io.stat content is None, returning None, None.")
         return None, None
@@ -196,13 +200,8 @@ def _parse_cgroup_io_stat(content: Optional[str]) -> Tuple[Optional[int], Option
             if not line_strip:
                 log_cgroup.debug(f"Line {line_num+1}: Skipping blank line.")
                 continue
-            if IO_STAT_DEVICE_LINE_PATTERN.match(line_strip):
-                log_cgroup.debug(
-                    f"Line {line_num+1}: Skipping device-specific line: '{line_strip}'"
-                )
-                continue
             log_cgroup.debug(
-                f"Line {line_num+1}: Processing aggregate line: '{line_strip}'"
+                f"Line {line_num+1}: Processing io.stat line: '{line_strip}'"
             )
             for part_num, part in enumerate(line_strip.split()):
                 log_cgroup.debug(f"  Part {part_num+1}: '{part}'")

@@ -49,8 +49,11 @@ SYSDIAG-ANALYZER(1)
               **OPTIONS for run:**
 
               **--since** *TEXT*
-                     Analyze logs since this time (e.g., '1 hour ago',
-                     'yesterday'). *Currently Not Implemented.*
+                     Restrict log analysis to entries since this time, passed
+                     through to `journalctl --since` (e.g. '1 hour ago',
+                     'yesterday', '2025-06-03 10:00'). When set, log analysis
+                     uses the journalctl path and the time window overrides the
+                     current-boot scope.
 
               **--enable-ebpf**
                      Enable eBPF-based process execution and exit tracing using
@@ -205,8 +208,11 @@ SYSDIAG-ANALYZER(1)
               `--analyze-llm` is passed).
 
               **provider** = *STRING*
-                     Specifies the LLM provider backend. Currently, only
-                     **"ollama"** is supported. (Required if using LLM features).
+                     Specifies the LLM provider backend. Supported values:
+                     **"ollama"** (local Ollama instance, `[llm]` extra) and
+                     **"openai"** / **"openai-compatible"** (any OpenAI-compatible
+                     /v1/chat/completions endpoint — OpenAI, vLLM, llama.cpp,
+                     LocalAI; `[openai]` extra). (Required if using LLM features).
                      Default: *None*
 
               **model** = *STRING*
@@ -217,11 +223,19 @@ SYSDIAG-ANALYZER(1)
                      option. (Required if `provider` is set).
                      Default: *None*
 
-              **host** = *STRING* (Ollama specific)
-                     The base URL of the Ollama API endpoint. Only needed if
-                     Ollama is running on a different host or port than the
-                     default (`http://localhost:11434`).
-                     Default: *None* (uses Ollama client default)
+              **host** = *STRING*
+                     For **ollama**: base URL of the Ollama API endpoint, only
+                     needed if it is not the default (`http://localhost:11434`).
+                     For **openai**/**openai-compatible**: the endpoint
+                     `base_url` (e.g. `http://localhost:8000/v1` for a local
+                     vLLM/llama.cpp/LocalAI server).
+                     Default: *None* (uses the provider client default)
+
+              **api_key** = *STRING* (openai/openai-compatible only)
+                     API key for OpenAI-compatible endpoints. Falls back to the
+                     `OPENAI_API_KEY` environment variable, then a placeholder
+                     for keyless local servers. Unused by the ollama provider.
+                     Default: *None*
 
               **temperature** = *FLOAT*
                      Controls the randomness of the LLM's output. Lower values

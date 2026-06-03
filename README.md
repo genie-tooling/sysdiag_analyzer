@@ -7,12 +7,12 @@ system logs, unit dependencies, historical trends, and process activity to provi
 a comprehensive health assessment. It leverages native Linux features, optional
 ML anomaly detection, LLM synthesis, and eBPF tracing for deep insights.
 
-**ANOMALY DETECTION WORK IN PROGRESS**
-The anomaly detection tends to work but is still under active development and tuning.
+> **Note on ML anomaly detection:** the LSTM autoencoder pipeline is covered by
+> end-to-end tests (train → persist → reload → detect), but anomaly *thresholds*
+> still benefit from tuning to your environment. Treat a high score as a signal
+> to investigate, not a definitive failure.
 
-The LLM analysis and overall health check does tend to work as expected.
-
-Training can be memory intensive so the recommendation is to build a base line of > 300 reports and run `retrain-ml` once, and then only run this if your baseline changes significantly and not on production systems during peak traffic times!
+Training can be memory intensive, so the recommendation is to build a baseline of > 300 reports and run `retrain-ml` once, then only re-run when your baseline changes significantly — and not on production systems during peak traffic times.
 
 ![Screenshot](screenshot/example.png)
 
@@ -42,17 +42,17 @@ eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, pyth
     *   Trains a model per unit on historical metrics (`.[ml]` extras required).
     *   Detects deviations from learned temporal patterns. A **high score** (reconstruction error) suggests a potential anomaly.
     *   By default, excludes device, slice, and scope units from training to conserve memory. Use the `--train-devices` flag to include them.
-*   **LLM Synthesis (Optional):** Uses a local LLM (via Ollama) to synthesize the report (`.[llm]` extra and Ollama setup required).
+*   **LLM Synthesis (Optional):** Synthesizes the report with a local LLM via Ollama (`.[llm]` extra) or any OpenAI-compatible endpoint — OpenAI, vLLM, llama.cpp, LocalAI (`.[openai]` extra).
 
 ## Prerequisites
 
-*   Python 3.8+
+*   Python 3.11+
 *   Linux system with **systemd** and **cgroup v2** enabled.
 *   Access to systemd (DBus preferred), journald, `/sys/fs/cgroup`, `/proc`.
 *   **Root privileges** generally required for full data access, eBPF, and default history/model saving.
-*   **Core Dependencies:** `typer[all]`, `rich`, `psutil`, `tomli` (Python < 3.11), `pygments`.
-*   **(Optional)** `cysystemd`, `dbus-python` (`.[native]`)
-*   **(Optional Extras)** `networkx` (`.[full-graph]`), `pandas`, `scikit-learn`, `tensorflow`, `joblib` (`.[ml]`), `ollama` (`.[llm]`).
+*   **Core Dependencies (small, pure-Python):** `typer`, `rich`, `psutil`, `pygments`. Config parsing uses the stdlib `tomllib` (Python 3.11+). A base `pip install` pulls only these — every heavyweight feature lives behind an extra below.
+*   **(Optional)** `cysystemd`, `dbus-python` (`.[native]` — faster journal/DBus access; falls back to `journalctl`/`systemctl` when absent).
+*   **(Optional Extras)** `networkx` (`.[full-graph]`); `pandas`, `scikit-learn`, `tensorflow`, `joblib` (`.[ml]`); `ollama` (`.[llm]`); `openai` (`.[openai]`); `prometheus-client` (`.[exporter]`); `bcc` (`.[ebpf]`, system package).
 
 *   **(Optional for eBPF Tracing)**: Enabling the `--enable-ebpf` flag has specific system requirements:
     1.  **BCC (BPF Compiler Collection):** The `bcc` library and tools must be installed.
@@ -85,9 +85,10 @@ sysdiag-analyzer config show
 
 **Key Settings:**
 *   `[llm]`: Configure the Large Language Model for report synthesis.
-    *   `provider`: Set to `"ollama"` to use a local Ollama instance.
-    *   `model`: Specify the model name to use (e.g., `"llama3:latest"`). This model must be downloaded in your Ollama instance.
-    *   `host`: (Optional) The URL of the Ollama API if it's not running on `http://localhost:11434`.
+    *   `provider`: `"ollama"` for a local Ollama instance, or `"openai"` / `"openai-compatible"` for any OpenAI-compatible endpoint (OpenAI, vLLM, llama.cpp, LocalAI).
+    *   `model`: Model name to use (e.g. `"llama3:latest"` for Ollama, `"gpt-4o-mini"` for OpenAI). For Ollama this must already be pulled.
+    *   `host`: (Optional) For Ollama, the API URL if not `http://localhost:11434`. For OpenAI-compatible providers, the endpoint `base_url` (e.g. `http://localhost:8000/v1`).
+    *   `api_key`: (OpenAI-compatible only) API key; falls back to the `OPENAI_API_KEY` env var, then a placeholder for keyless local servers.
 *   `[history]`: Customize data persistence.
     *   `directory`: Change the default path (`/var/lib/sysdiag-analyzer/history`) where analysis reports are saved.
     *   `max_files`: Set the number of old reports to keep.
@@ -103,8 +104,8 @@ For a full list of all configuration options, please refer to the `MAN.md` file 
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install base package (includes pygments for highlighting)
-pip install . "pygments"
+# Install base package (small, pure-Python core)
+pip install .
 
 # Install optional features (choose needed extras)
 # Example: pip install ".[ml,llm,ebpf]"

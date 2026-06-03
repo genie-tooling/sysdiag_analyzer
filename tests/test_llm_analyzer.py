@@ -18,6 +18,14 @@ except ImportError:
     HAS_OLLAMA = False
     ollama = None # type: ignore
 
+# Conditional import for the OpenAI-compatible provider
+try:
+    import openai  # noqa: F401
+    HAS_OPENAI = getattr(llm_analyzer, 'HAS_OPENAI', False)
+except ImportError:
+    HAS_OPENAI = False
+    openai = None # type: ignore
+
 # --- Fixtures ---
 
 @pytest.fixture(autouse=True)
@@ -153,4 +161,88 @@ def test_analyze_with_llm_success(mock_create_prompt, mock_gen_history, mock_get
     mock_create_prompt.assert_called_once_with(sample_report, "Mock history.")
     mock_provider_instance.generate.assert_called_once()
 
-# ... other analyze_with_llm tests remain similar, ensuring mock_history_dir_llm is passed ...
+
+# --- Real orchestration tests (only the Ollama network boundary is stubbed) ---
+
+def test_create_llm_prompt_embeds_report_data(sample_report):
+    """The prompt builder must embed actual report data, not just boilerplate."""
+    prompt = llm_analyzer._create_llm_prompt(sample_report, "HIST-SUMMARY-MARKER")
+    assert prompt.startswith("/no_think")          # provider directive preserved
+    assert sample_report.hostname in prompt         # "test-host"
+    assert "failed.service" in prompt               # real failed-unit name embedded
+    assert "anomaly.service" in prompt              # real anomaly embedded
+    assert "HIST-SUMMARY-MARKER" in prompt          # historical context spliced in
+
+
+@pytest.mark.skipif(not HAS_OLLAMA, reason="Ollama library not installed")
+def test_analyze_with_llm_real_orchestration(mock_ollama_client, sample_report, sample_llm_config, mock_history_dir_llm):
+    """
+    Exercise the REAL orchestration path end-to-end: real provider factory, real
+    historical-summary generation (against an empty history dir), real prompt
+    construction, and real Ollama response parsing. Only ollama.Client is stubbed,
+    so this catches breakage the fully-mocked orchestration test cannot.
+    """
+    if mock_ollama_client is None:
+        pytest.skip("Ollama client could not be mocked (library likely missing).")
+
+    result = llm_analyzer.analyze_with_llm(sample_report, sample_llm_config, mock_history_dir_llm)
+
+    assert result.error is None
+    assert result.synthesis == "Generated synthesis."
+    assert result.prompt_token_count == 50
+    assert result.completion_token_count == 100
+    assert result.provider_used == "ollama"
+    assert result.model_used == "test-model:latest"
+
+    # The real prompt builder ran and embedded report data before hitting the client.
+    mock_ollama_client.generate.assert_called_once()
+    sent_prompt = mock_ollama_client.generate.call_args.kwargs["prompt"]
+    assert "test-host" in sent_prompt
+    assert "failed.service" in sent_prompt
+
+
+# --- OpenAI-compatible provider tests ---
+
+@pytest.fixture
+def mock_openai_client():
+    """Mocks openai.OpenAI to return a canned chat completion."""
+    if not getattr(llm_analyzer, 'HAS_OPENAI', False) or openai is None:
+        yield None
+        return
+    with patch.object(llm_analyzer.openai, 'OpenAI') as mock_cls:
+        instance = MagicMock()
+        message = MagicMock()
+        message.content = "OpenAI synthesis."
+        choice = MagicMock()
+        choice.message = message
+        usage = MagicMock()
+        usage.prompt_tokens = 42
+        usage.completion_tokens = 84
+        response = MagicMock()
+        response.choices = [choice]
+        response.usage = usage
+        instance.chat.completions.create.return_value = response
+        mock_cls.return_value = instance
+        yield instance
+
+
+@pytest.mark.skipif(not HAS_OPENAI, reason="openai library not installed")
+def test_get_provider_openai_compatible(sample_llm_config):
+    provider = llm_analyzer.LLMProvider.get_provider("openai", "gpt-4o-mini", sample_llm_config)
+    assert isinstance(provider, llm_analyzer.OpenAICompatibleProvider)
+    provider2 = llm_analyzer.LLMProvider.get_provider("openai-compatible", "local-model", sample_llm_config)
+    assert isinstance(provider2, llm_analyzer.OpenAICompatibleProvider)
+
+
+@pytest.mark.skipif(not HAS_OPENAI, reason="openai library not installed")
+def test_openai_provider_generate_success(mock_openai_client):
+    if mock_openai_client is None:
+        pytest.skip("openai client could not be mocked.")
+    provider = llm_analyzer.OpenAICompatibleProvider("gpt-4o-mini", {"host": "http://localhost:8000/v1"})
+    synthesis, tokens, error = provider.generate("prompt", 0.2, 256, 4096)
+    assert error is None
+    assert synthesis == "OpenAI synthesis."
+    assert tokens == {"prompt_tokens": 42, "completion_tokens": 84}
+    call = mock_openai_client.chat.completions.create.call_args
+    assert call.kwargs["model"] == "gpt-4o-mini"
+    assert call.kwargs["messages"][0]["content"] == "prompt"

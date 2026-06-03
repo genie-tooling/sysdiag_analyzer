@@ -352,3 +352,16 @@ def test_analyze_logs_options_fallback(mock_run_subprocess_logs):
     cmd_args = call_args_list[0].args[0]
     assert "-b0" in cmd_args
     assert "-p5..0" in cmd_args
+
+
+# Scenario: --since forces the journalctl path and uses --since instead of -b,
+# even when native journal bindings are available.
+@patch('sysdiag_analyzer.modules.logs.HAS_NATIVE_JOURNAL', True)
+def test_analyze_logs_since_uses_journalctl(mock_run_subprocess_logs):
+    result = logs.analyze_general_logs(since="1 hour ago")
+    assert result.log_source == "journalctl"  # native skipped despite being available
+    mock_run_subprocess_logs.assert_called_once()
+    cmd_args = mock_run_subprocess_logs.call_args.args[0]
+    assert "--since" in cmd_args
+    assert "1 hour ago" in cmd_args
+    assert not any(a.startswith("-b") for a in cmd_args)

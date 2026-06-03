@@ -213,6 +213,7 @@ def _run_core_analyses(
     all_units: List[UnitHealthInfo],
     dbus_manager: Optional[Any],
     analyze_full_graph: bool,
+    since: Optional[str] = None,
 ) -> SystemReport:
     try:
         report.boot_analysis = analyze_boot_logic()
@@ -309,7 +310,7 @@ def _run_core_analyses(
         log.info("Skipping full dependency graph analysis (flag not set).")
 
     try:
-        report.log_analysis = analyze_logs_logic()
+        report.log_analysis = analyze_logs_logic(since=since)
     except Exception as e:
         log.exception("Error during log analysis.")
         report.errors.append(f"Log analysis failed: {e}")
@@ -404,6 +405,7 @@ def run_full_analysis(
                         all_units,
                         dbus_manager,
                         analyze_full_graph,
+                        since,
                     )
                     while not analysis_future.done():
                         ebpf_collector.poll_events(timeout_ms=100)
@@ -425,7 +427,7 @@ def run_full_analysis(
                 ebpf_collector = None
     else:
         log.info("Skipping eBPF analysis (flag not set). Running core analysis synchronously.")
-        report = _run_core_analyses(report, all_units, dbus_manager, analyze_full_graph)
+        report = _run_core_analyses(report, all_units, dbus_manager, analyze_full_graph, since)
 
     if ebpf_collector:
         log.info("Stopping eBPF monitoring and collecting events...")
@@ -608,7 +610,7 @@ def run(
     since: Optional[str] = typer.Option(
         None,
         "--since",
-        help="Analyze logs since this time (e.g., '1 hour ago', 'yesterday') - Not Implemented Yet.",
+        help="Restrict log analysis to entries since this time (passed to journalctl --since, e.g. '1 hour ago', 'yesterday', '2025-06-03 10:00').",
     ),
     output: str = typer.Option(
         "rich", "--output", "-o", help="Output format ('rich' or 'json')."
