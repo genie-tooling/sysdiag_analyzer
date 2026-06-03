@@ -1,6 +1,9 @@
 # tests/test_tui.py
 # -*- coding: utf-8 -*-
 """Tests for the top-like live view rendering (pure render + sorting)."""
+import logging
+from unittest.mock import patch
+
 from rich.console import Console
 
 from sysdiag_analyzer import tui
@@ -49,3 +52,29 @@ def test_sort_units_by_cpu_and_mem():
     ]
     assert [u.name for u in tui._sort_units(units, "cpu")][0] == "b"
     assert [u.name for u in tui._sort_units(units, "mem")][0] == "b"
+
+
+class _DummyLive:
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def update(self, *a, **k):
+        pass
+
+
+def test_run_top_silences_then_restores_logging():
+    """The live loop disables logging (so warnings don't flash over the screen)
+    and must restore it on exit."""
+    with patch.object(tui, "Live", _DummyLive), \
+         patch("sysdiag_analyzer.modules.health.HAS_DBUS", False), \
+         patch("sysdiag_analyzer.modules.health._get_all_units_json", return_value=([], None)), \
+         patch("sysdiag_analyzer.modules.resources.get_system_wide_usage", side_effect=KeyboardInterrupt):
+        tui.run_top({}, interval=0)
+    # Global logging disable level is back to 0 (NOTSET).
+    assert logging.getLogger().manager.disable == 0

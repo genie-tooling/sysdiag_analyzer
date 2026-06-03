@@ -7,6 +7,7 @@ lookup is resolved once and cached, so each refresh only re-reads the cheap
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Any, Dict, List, Optional, Set
 
@@ -123,6 +124,9 @@ def run_top(
     units = fetch_units()
     path_cache: Dict[str, Optional[str]] = {}
     tick = 0
+    # The analyzers emit log records every refresh; on a full-screen Live view
+    # those flash over the display. Silence logging for the loop, restore after.
+    logging.disable(logging.ERROR)
     try:
         with Live(console=console, screen=True, refresh_per_second=4) as live:
             while True:
@@ -139,3 +143,5 @@ def run_top(
                 tick += 1
     except KeyboardInterrupt:
         pass
+    finally:
+        logging.disable(logging.NOTSET)
