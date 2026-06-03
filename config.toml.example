@@ -37,11 +37,26 @@
 # Maximum number of report files to keep. Older files will be deleted.
 # max_files = 50
 
-# --- ML Model Configuration (Optional) ---
+# --- ML Anomaly Detection Configuration (Optional) ---
 [models]
-# Directory to store trained ML models. Requires write permissions for retrain-ml.
+# Directory to store trained ML models (only used by the "lstm" method).
 # directory = "/var/lib/sysdiag-analyzer/models"
 
+# Detection method:
+#   "statistical" (default) - robust per-unit/per-metric detector (median + MAD).
+#                  No training, no model files, no extra deps; works out of the box.
+#   "lstm"        - per-unit LSTM autoencoder; requires the [ml] extra (TensorFlow)
+#                  and a prior `retrain-ml`.
+# method = "statistical"
+
+# Sensitivity for the statistical method: "low" | "medium" | "high".
+# Lower = fewer, higher-confidence anomalies.
+# sensitivity = "medium"
+
+# Number of recent reports loaded as each unit's baseline (statistical method).
+# history_window = 30
+
+# --- LSTM-specific (only used when method = "lstm") ---
 # Number of historical data points (timesteps) to use in a sequence for the LSTM model.
 # A larger value helps the model learn longer-term patterns but requires more data to train.
 # Value must be smaller than `min_samples_train`.

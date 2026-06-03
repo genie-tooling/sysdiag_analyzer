@@ -52,6 +52,7 @@ from .modules.dependencies import (
     analyze_full_dependency_graph,
 )
 from . import features
+from . import ml_baseline
 from .unit_analyzer import run_single_unit_analysis
 
 from .output import (
@@ -449,8 +450,13 @@ def run_full_analysis(
         log.info("ML analysis requested.")
         ml_result = MLAnalysisResult()
         report.ml_analysis = ml_result
-        if not HAS_ML_ENGINE or not ml_engine:
-            ml_result.error = "ML dependencies not installed. Skipping ML analysis."
+        ml_method = app_config.get("models", {}).get("method", "statistical")
+        ml_sensitivity = app_config.get("models", {}).get("sensitivity", "medium")
+        if ml_method != "statistical" and (not HAS_ML_ENGINE or not ml_engine):
+            ml_result.error = (
+                "LSTM anomaly detection requires ML dependencies "
+                "(pip install 'sysdiag-analyzer[ml]'). Skipping."
+            )
             log.error(ml_result.error)
         else:
             try:
@@ -475,6 +481,23 @@ def run_full_analysis(
                 if not active_service_names:
                     ml_result.error = "No active services with a PID found to analyze."
                     log.warning(ml_result.error)
+                elif ml_method == "statistical":
+                    history_window = app_config.get("models", {}).get(
+                        "history_window", ml_baseline.DEFAULT_HISTORY_WINDOW
+                    )
+                    log.info(
+                        f"Running statistical anomaly detection "
+                        f"(sensitivity={ml_sensitivity}, window={history_window} reports)..."
+                    )
+                    historical_reports = features.load_historical_data(
+                        history_dir, num_reports=history_window
+                    )
+                    all_reports_for_ml = historical_reports + [asdict(report)]
+                    feats = features.extract_features(all_reports_for_ml)
+                    ml_result.units_analyzed_count = len(active_service_names)
+                    ml_result.anomalies_detected = ml_baseline.detect_anomalies_statistical(
+                        feats, sensitivity=ml_sensitivity, only_units=active_service_names
+                    )
                 else:
                     log.info(
                         f"Loading ML models from {model_dir} for {len(active_service_names)} active services..."

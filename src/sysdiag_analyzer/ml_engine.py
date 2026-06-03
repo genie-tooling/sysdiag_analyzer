@@ -517,7 +517,7 @@ def detect_anomalies(
         mae_loss = np.mean(np.abs(pred - X_test), axis=1).flatten()[0]
 
         if mae_loss > threshold:
-            anomalies.append(AnomalyInfo(unit_name=unit_name, score=float(mae_loss)))
+            anomalies.append(AnomalyInfo(unit_name=unit_name, score=float(mae_loss), method="lstm"))
             log_ml.info(
                 f"Anomaly detected for '{unit_name}': Reconstruction error {mae_loss:.4f} > threshold {threshold:.4f}"
             )

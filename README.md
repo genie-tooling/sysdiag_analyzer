@@ -7,10 +7,11 @@ system logs, unit dependencies, historical trends, and process activity to provi
 a comprehensive health assessment. It leverages native Linux features, optional
 ML anomaly detection, LLM synthesis, and eBPF tracing for deep insights.
 
-> **Note on ML anomaly detection:** the LSTM autoencoder pipeline is covered by
-> end-to-end tests (train → persist → reload → detect), but anomaly *thresholds*
-> still benefit from tuning to your environment. Treat a high score as a signal
-> to investigate, not a definitive failure.
+> **ML anomaly detection works out of the box.** The default **statistical** method
+> needs no training, no model files, and no heavyweight dependencies, and engages
+> after ~a dozen reports — tune noise with `[models].sensitivity`. The **LSTM** method
+> (`[models].method = "lstm"`) is an optional deep mode that needs the `[ml]` extra and
+> a prior `retrain-ml`. Treat any anomaly as a signal to investigate, not a verdict.
 
 Training can be memory intensive, so the recommendation is to build a baseline of > 300 reports and run `retrain-ml` once, then only re-run when your baseline changes significantly — and not on production systems during peak traffic times.
 
@@ -38,10 +39,10 @@ eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, pyth
     *   Provides insights into short-lived processes or unexpected executions.
     *   Requires **root privileges** and specific system libraries (see Prerequisites).
 *   **Historical Persistence:** Saves reports (JSONL.gz) to `/var/lib/sysdiag-analyzer/history/` (configurable), applies retention policy.
-*   **ML Anomaly Detection (LSTM Autoencoder):**
-    *   Trains a model per unit on historical metrics (`.[ml]` extras required).
-    *   Detects deviations from learned temporal patterns. A **high score** (reconstruction error) suggests a potential anomaly.
-    *   By default, excludes device, slice, and scope units from training to conserve memory. Use the `--train-devices` flag to include them.
+*   **ML Anomaly Detection (two-tier):**
+    *   **Statistical (default, zero-setup):** a robust per-unit, per-metric detector (median + MAD *modified z-score*) that needs **no training, no model files, and no extra dependencies** — it works out of the box from ~a dozen historical reports. Cumulative cgroup counters (CPU, I/O) are converted to **rates** first, so it models behaviour rather than uptime, and a reboot (counter reset) isn't mistaken for an anomaly. Each anomaly reports **which metric(s)** drove it.
+    *   **LSTM autoencoder (opt-in deep mode):** a per-unit temporal model for sites with lots of history. Requires the `.[ml]` extra (TensorFlow) and a prior `retrain-ml`; select it with `[models].method = "lstm"`. Excludes device/slice/scope units by default (`--train-devices` to include).
+    *   Sensitivity is tunable via `[models].sensitivity` (`low` / `medium` / `high`).
 *   **LLM Synthesis (Optional):** Synthesizes the report with a local LLM via Ollama (`.[llm]` extra) or any OpenAI-compatible endpoint — OpenAI, vLLM, llama.cpp, LocalAI (`.[openai]` extra).
 
 ## Prerequisites
@@ -218,7 +219,7 @@ After these steps, the `/var/lib/sysdiag-analyzer/models` directory on the targe
 
 ## Interpreting Special Features
 
-*   **ML Anomalies:** The score is a "reconstruction error." A score near 0 is normal. A **high score** indicates the unit's current behavior deviates from its learned historical patterns and is potentially anomalous.
+*   **ML Anomalies:** Each anomaly names the detection **method** and the **contributing metric(s)**. For the **statistical** method the score is a robust z-score — how many MADs the latest sample sits above that unit's own recent baseline (~3.5+ is notable), with counters scored as rates. For the **LSTM** method the score is reconstruction error (near 0 = normal; high = deviates from learned patterns). In both cases, corroborate with the resource/health/log sections before acting.
 *   **eBPF:** Look for unexpected process executions (filename/comm), frequent short-lived processes, or non-zero exit codes correlated with failures.
 *   **Child Processes:** Useful for identifying resource usage by workloads (like containers) started by systemd services (e.g., `docker.service`). High aggregate CPU/Memory for a command under a specific parent unit warrants investigation.
 

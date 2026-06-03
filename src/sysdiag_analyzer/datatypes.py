@@ -240,6 +240,10 @@ class AnomalyInfo:
 
     unit_name: str
     score: float
+    method: Optional[str] = None  # detector that produced it: "statistical" | "lstm"
+    # For the statistical detector: metric name -> robust z-score that exceeded the
+    # threshold, i.e. which feature(s) drove the anomaly.
+    contributing_metrics: Optional[Dict[str, float]] = None
 
 
 @dataclass

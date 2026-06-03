@@ -937,9 +937,23 @@ def format_ml_report(result: Optional[MLAnalysisResult], console: Console) -> No
         )
         table.add_column("Unit", style="yellow", no_wrap=True)
         table.add_column("Anomaly Score", style="magenta", width=15, justify="right")
+        table.add_column("Method", style="cyan", width=11)
+        table.add_column("Top Contributing Metrics", style="dim")
         for anomaly in sorted_anomalies:
             score_str = f"{anomaly.score:.4f}"
-            table.add_row(anomaly.unit_name, score_str)
+            method_str = anomaly.method or "[dim]n/a[/dim]"
+            if anomaly.contributing_metrics:
+                details_str = ", ".join(
+                    f"{m} (z={z:.1f})"
+                    for m, z in sorted(
+                        anomaly.contributing_metrics.items(),
+                        key=lambda kv: kv[1],
+                        reverse=True,
+                    )
+                )
+            else:
+                details_str = ""
+            table.add_row(anomaly.unit_name, score_str, method_str, details_str)
         output_elements.append(table)
     if output_elements:
         final_panel = Panel(

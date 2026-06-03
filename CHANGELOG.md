@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-06-03
+
+### Changed
+- **Anomaly detection is useful out of the box.** The default method is now a
+  **statistical** detector — a robust per-unit/per-metric median + MAD modified
+  z-score that needs no training step, no persisted model, and no heavyweight
+  dependencies. It runs on a base install (no `[ml]` extra / no TensorFlow) and
+  engages after ~a dozen reports. The LSTM autoencoder becomes an opt-in "deep"
+  mode via `[models].method = "lstm"`.
+
+### Added
+- **Counter→rate conversion.** Cumulative cgroup counters (`cpu_usage_nsec`,
+  `io_read/write_bytes`) are converted to per-second rates before scoring, so the
+  detector models behaviour rather than uptime and a reboot (counter reset) is no
+  longer mistaken for an anomaly.
+- **Per-feature attribution.** Anomalies report which metric(s) deviated and by how
+  much (z-score), shown in the rich/JSON report. `AnomalyInfo` gains `method` and
+  `contributing_metrics`.
+- **Tuning knobs:** `[models].method`, `[models].sensitivity` (low|medium|high),
+  and `[models].history_window`.
+
+### Notes
+- The LSTM path still trains on raw counter *levels*; migrating it to rates is
+  future work. The statistical default is unaffected.
+
 ## [0.10.0] - 2026-06-03
 
 ### Added

@@ -32,6 +32,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "models": {
         "directory": "/var/lib/sysdiag-analyzer/models",
+        # Anomaly detection method: "statistical" (default; robust, stdlib-only,
+        # works out of the box with no training/TensorFlow) or "lstm" (opt-in deep
+        # mode, requires the [ml] extra and a prior `retrain-ml`).
+        "method": "statistical",
+        # Detection sensitivity for the statistical method: low | medium | high.
+        "sensitivity": "medium",
+        # Number of recent reports loaded as the per-unit baseline (statistical).
+        "history_window": 30,
+        # LSTM-specific (only used when method = "lstm").
         "lstm_timesteps": 5,
         "min_samples_train": 10,
     },
