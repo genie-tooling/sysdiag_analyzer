@@ -25,6 +25,7 @@ eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, pyth
 
 ## Features
 
+*   **Live `top` View:** `sysdiag-analyzer top` — a continuously refreshing, top-like table of per-unit cgroup usage (memory, CPU, I/O, tasks) with memory **limit** / **%-of-limit** columns, sortable by `mem`/`cpu`/`io`/`limit`; failed units are highlighted and uncapped cgroups flagged.
 *   **Boot Analysis:** Timing breakdown, unit activation times, critical chain.
 *   **Service Health Checks:** Failed/flapping units, socket/timer issues. (DBus/cysystemd preferred)
 *   **Resource Utilization Monitoring:**
@@ -126,6 +127,9 @@ sudo sysdiag-analyzer run
 
 # Enable optional analyses
 sudo sysdiag-analyzer run --enable-ebpf --analyze-ml --analyze-llm
+
+# Live top-like view (sort by %-of-memory-limit; Ctrl-C to quit)
+sudo sysdiag-analyzer top --sort limit
 
 # Specific module
 sudo sysdiag-analyzer analyze-health

@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-06-03
+
+### Added
+- **`top` — a live, top-like view.** `sysdiag-analyzer top` shows a continuously
+  refreshing table of per-unit cgroup usage (memory, CPU, I/O, tasks) with the
+  memory **limit** and **%-of-limit** columns, sortable by `mem`/`cpu`/`io`/`limit`,
+  failed units highlighted in red, and uncapped cgroups flagged `none`. Built on
+  rich.Live (no new dependencies). The expensive DBus cgroup-path lookup is cached
+  so each refresh only re-reads the cheap /sys files; `get_unit_resource_usage`
+  gained an optional `cgroup_path_cache` parameter to support this.
+
 ## [0.11.0] - 2026-06-03
 
 ### Changed

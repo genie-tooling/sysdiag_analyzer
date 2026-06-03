@@ -608,10 +608,16 @@ def get_system_wide_usage() -> SystemResourceUsage:
 
 
 def get_unit_resource_usage(
-    units: List[UnitHealthInfo], dbus_manager: Optional[Any]
+    units: List[UnitHealthInfo],
+    dbus_manager: Optional[Any],
+    cgroup_path_cache: Optional[Dict[str, Optional[str]]] = None,
 ) -> List[UnitResourceUsage]:
-    """Gathers resource usage for a list of units via cgroup v2 files."""
-    # (Logic remains the same)
+    """Gathers resource usage for a list of units via cgroup v2 files.
+
+    If ``cgroup_path_cache`` is supplied, the (expensive) DBus cgroup-path lookup
+    is resolved once per unit and reused on later calls — needed for a live
+    refresh loop (e.g. the ``top`` view), where only the cheap /sys reads repeat.
+    """
     log.debug(f"Getting resource usage for {len(units)} units via cgroups...")
     results: List[UnitResourceUsage] = []
     if not CGROUP_BASE_PATH.is_dir():
@@ -623,7 +629,12 @@ def get_unit_resource_usage(
         unit_name = unit_info.name
         usage = UnitResourceUsage(name=unit_name)
         error_parts = []
-        relative_cgroup_path = _get_unit_cgroup_path(unit_name, dbus_manager)
+        if cgroup_path_cache is not None and unit_name in cgroup_path_cache:
+            relative_cgroup_path = cgroup_path_cache[unit_name]
+        else:
+            relative_cgroup_path = _get_unit_cgroup_path(unit_name, dbus_manager)
+            if cgroup_path_cache is not None:
+                cgroup_path_cache[unit_name] = relative_cgroup_path
         if not relative_cgroup_path:
             log_cgroup.debug(
                 f"Skipping cgroup resource collection for {unit_name}: No cgroup path found."

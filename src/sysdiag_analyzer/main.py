@@ -915,6 +915,44 @@ def exporter(
 
 
 @app.command()
+def top(
+    interval: float = typer.Option(
+        2.0, "--interval", "-i", help="Refresh interval in seconds."
+    ),
+    sort: str = typer.Option(
+        "mem", "--sort", "-s", help="Sort units by: mem | cpu | limit | io."
+    ),
+    count: int = typer.Option(
+        25, "--count", "-n", help="Number of units to display."
+    ),
+    config_file: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to a custom TOML configuration file.",
+        exists=False,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+):
+    """
+    Live, top-like view of per-unit cgroup resource usage (Ctrl-C to quit).
+
+    Sorts units by memory, CPU, I/O, or %-of-memory-limit, flags failed units,
+    and highlights cgroups with no memory limit. Full per-unit data needs
+    DBus/cgroup access (run with sudo); system-wide stats always work.
+    """
+    from . import tui
+
+    app_config = load_config(config_path_override=config_file)
+    check_privileges(required_for="DBus and cgroup access for full per-unit data")
+    tui.run_top(
+        app_config, interval=interval, sort_key=sort, count=count, console=CONSOLE
+    )
+
+
+@app.command()
 def retrain_ml(
     num_reports: int = typer.Option(
         300,

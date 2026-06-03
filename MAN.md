@@ -163,6 +163,25 @@ SYSDIAG-ANALYZER(1)
               all-in-one view for troubleshooting a single unit.
 
        
+       **top** \[*OPTIONS*]
+              Display a live, top-like view of per-unit cgroup resource usage
+              that refreshes until interrupted (Ctrl-C). Shows memory, CPU, I/O
+              and task counts per unit alongside the configured memory limit and
+              percentage-of-limit; failed units are highlighted and cgroups with
+              no memory limit are flagged. Full per-unit data needs DBus/cgroup
+              access (run with sudo); system-wide stats are always shown.
+
+              **OPTIONS for top:**
+
+              **--interval** *FLOAT*, **-i** *FLOAT*
+                     Refresh interval in seconds. (Default: 2.0)
+
+              **--sort** *TEXT*, **-s** *TEXT*
+                     Sort units by: mem | cpu | limit | io. (Default: mem)
+
+              **--count** *INTEGER*, **-n** *INTEGER*
+                     Number of units to display. (Default: 25)
+
        **exporter** \[*OPTIONS*]
               Run a persistent Prometheus exporter to expose unique analysis
               metrics. This command starts a web server and runs a targeted
