@@ -10,7 +10,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/boot"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/health"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/logs"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/resources"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/config"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/report"
@@ -24,6 +26,7 @@ var (
 	noSave     bool
 	enableEBPF bool
 	analyzeML  bool
+	since      string
 )
 
 func newReport() *types.SystemReport {
@@ -68,15 +71,18 @@ func main() {
 				return fmt.Errorf("listing units: %w", err)
 			}
 			r := newReport()
+			r.BootAnalysis = boot.Analyze()
 			r.HealthAnalysis = health.Analyze(ctx, units)
 			r.ResourceAnalysis = resources.Analyze(ctx, units)
-			// TODO(P2): boot/logs/deps; history persistence (--no-save), --analyze-ml, --enable-ebpf.
+			r.LogAnalysis = logs.Analyze(0, logs.DefaultAnalysisLevel, since)
+			// TODO: deps; history persistence (--no-save), --analyze-ml, --enable-ebpf, --analyze-llm.
 			return emit(r)
 		},
 	}
 	runCmd.Flags().BoolVar(&noSave, "no-save", false, "Do not save the report to history (P2).")
 	runCmd.Flags().BoolVar(&enableEBPF, "enable-ebpf", false, "Enable eBPF tracing (P5).")
 	runCmd.Flags().BoolVar(&analyzeML, "analyze-ml", false, "Statistical anomaly + leak detection (P2).")
+	runCmd.Flags().StringVar(&since, "since", "", "Restrict log analysis to entries since this time (journalctl --since).")
 
 	healthCmd := &cobra.Command{
 		Use:   "analyze-health",
@@ -106,6 +112,27 @@ func main() {
 		},
 	}
 
+	bootCmd := &cobra.Command{
+		Use:   "analyze-boot",
+		Short: "Boot performance analysis only.",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			r := newReport()
+			r.BootAnalysis = boot.Analyze()
+			return emit(r)
+		},
+	}
+
+	logsCmd := &cobra.Command{
+		Use:   "analyze-logs",
+		Short: "Log analysis only.",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			r := newReport()
+			r.LogAnalysis = logs.Analyze(0, logs.DefaultAnalysisLevel, since)
+			return emit(r)
+		},
+	}
+	logsCmd.Flags().StringVar(&since, "since", "", "Restrict to entries since this time (journalctl --since).")
+
 	configCmd := &cobra.Command{Use: "config", Short: "Configuration commands."}
 	configShow := &cobra.Command{
 		Use:   "show",
@@ -118,7 +145,7 @@ func main() {
 	}
 	configCmd.AddCommand(configShow)
 
-	root.AddCommand(runCmd, healthCmd, resourcesCmd, configCmd)
+	root.AddCommand(runCmd, healthCmd, resourcesCmd, bootCmd, logsCmd, configCmd)
 	root.SetContext(context.Background())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

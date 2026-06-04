@@ -55,6 +55,16 @@ func Text(r *types.SystemReport, w io.Writer) {
 		su := r.ResourceAnalysis.SystemUsage
 		fmt.Fprintf(w, "System: CPU %s   Mem %s   Swap %s\n", pct(su.CPUPercent), pct(su.MemPercent), pct(su.SwapPercent))
 	}
+	if b := r.BootAnalysis; b != nil && b.Times != nil && b.Times.Total != "" {
+		fmt.Fprintf(w, "Boot: total %s (kernel %s, userspace %s)\n",
+			b.Times.Total, b.Times.Kernel, b.Times.Userspace)
+	}
+	if l := r.LogAnalysis; l != nil && len(l.DetectedPatterns) > 0 {
+		fmt.Fprintf(w, "Log patterns (%d entries analyzed):\n", l.TotalEntriesAnalyzed)
+		for _, p := range l.DetectedPatterns {
+			fmt.Fprintf(w, "  %-8s %-22s ×%d\n", p.PatternType, p.PatternKey, p.Count)
+		}
+	}
 	if h := r.HealthAnalysis; h != nil {
 		fmt.Fprintf(w, "Health: %d units · %d failed · %d flapping\n", h.AllUnitsCount, len(h.FailedUnits), len(h.FlappingUnits))
 		for _, u := range h.FailedUnits {

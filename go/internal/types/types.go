@@ -48,11 +48,12 @@ func (u *UnitResourceUsage) MemoryPercentOfLimit() *float64 {
 
 // ChildProcessGroupUsage mirrors datatypes.ChildProcessGroupUsage.
 type ChildProcessGroupUsage struct {
-	ParentUnit              string   `json:"parent_unit"`
 	CommandName             string   `json:"command_name"`
+	ParentUnit              string   `json:"parent_unit"`
 	ProcessCount            int      `json:"process_count"`
-	AggregatedMemoryBytes   *int64   `json:"aggregated_memory_bytes"`
+	Pids                    []int    `json:"pids"`
 	AggregatedCPUSecondsTot *float64 `json:"aggregated_cpu_seconds_total"`
+	AggregatedMemoryBytes   *int64   `json:"aggregated_memory_bytes"`
 }
 
 // ResourceAnalysisResult mirrors datatypes.ResourceAnalysisResult.
@@ -85,20 +86,177 @@ type UnitHealthInfo struct {
 
 // HealthAnalysisResult mirrors datatypes.HealthAnalysisResult.
 type HealthAnalysisResult struct {
-	FailedUnits         []UnitHealthInfo `json:"failed_units"`
-	FlappingUnits       []UnitHealthInfo `json:"flapping_units"`
-	ProblematicSockets  []UnitHealthInfo `json:"problematic_sockets"`
-	ProblematicTimers   []UnitHealthInfo `json:"problematic_timers"`
-	AllUnitsCount       int              `json:"all_units_count"`
-	AnalysisError       string           `json:"analysis_error,omitempty"`
+	FailedUnits        []UnitHealthInfo `json:"failed_units"`
+	FlappingUnits      []UnitHealthInfo `json:"flapping_units"`
+	ProblematicSockets []UnitHealthInfo `json:"problematic_sockets"`
+	ProblematicTimers  []UnitHealthInfo `json:"problematic_timers"`
+	AllUnitsCount      int              `json:"all_units_count"`
+	AnalysisError      string           `json:"analysis_error,omitempty"`
 }
 
-// SystemReport mirrors datatypes.SystemReport (subset populated so far).
+// --- Boot ---
+
+type BootTimes struct {
+	Firmware  string `json:"firmware,omitempty"`
+	Loader    string `json:"loader,omitempty"`
+	Kernel    string `json:"kernel,omitempty"`
+	Initrd    string `json:"initrd,omitempty"`
+	Userspace string `json:"userspace,omitempty"`
+	Total     string `json:"total,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type BootBlameItem struct {
+	Time string `json:"time"`
+	Unit string `json:"unit"`
+}
+
+type CriticalChainItem struct {
+	Unit      string `json:"unit"`
+	TimeAt    string `json:"time_at,omitempty"`
+	TimeDelta string `json:"time_delta,omitempty"`
+	Indent    int    `json:"indent"`
+}
+
+type BootAnalysisResult struct {
+	Times              *BootTimes          `json:"times"`
+	Blame              []BootBlameItem     `json:"blame"`
+	CriticalChain      []CriticalChainItem `json:"critical_chain"`
+	BlameError         string              `json:"blame_error,omitempty"`
+	CriticalChainError string              `json:"critical_chain_error,omitempty"`
+}
+
+// --- Logs ---
+
+type LogPatternInfo struct {
+	PatternType     string   `json:"pattern_type"`
+	PatternKey      string   `json:"pattern_key"`
+	Count           int      `json:"count"`
+	Level           string   `json:"level,omitempty"`
+	ExampleMessages []string `json:"example_messages"`
+}
+
+type LogAnalysisResult struct {
+	DetectedPatterns     []LogPatternInfo `json:"detected_patterns"`
+	TotalEntriesAnalyzed int              `json:"total_entries_analyzed"`
+	LogSource            string           `json:"log_source,omitempty"`
+	AnalysisError        string           `json:"analysis_error,omitempty"`
+}
+
+// --- Dependencies ---
+
+type DependencyInfo struct {
+	Name               string `json:"name"`
+	Type               string `json:"type"`
+	CurrentLoadState   string `json:"current_load_state,omitempty"`
+	CurrentActiveState string `json:"current_active_state,omitempty"`
+	CurrentSubState    string `json:"current_sub_state,omitempty"`
+	IsProblematic      bool   `json:"is_problematic"`
+}
+
+type FailedUnitDependencyInfo struct {
+	UnitName     string           `json:"unit_name"`
+	Dependencies []DependencyInfo `json:"dependencies"`
+	Error        string           `json:"error,omitempty"`
+}
+
+type DependencyAnalysisResult struct {
+	FailedUnitDependencies []FailedUnitDependencyInfo `json:"failed_unit_dependencies"`
+	AnalysisError          string                     `json:"analysis_error,omitempty"`
+}
+
+type FullDependencyAnalysisResult struct {
+	DetectedCycles       [][]string `json:"detected_cycles"`
+	AnalysisError        string     `json:"analysis_error,omitempty"`
+	DependencyFetchError string     `json:"dependency_fetch_error,omitempty"`
+	GraphBuildError      string     `json:"graph_build_error,omitempty"`
+}
+
+// --- ML / memory-leak ---
+
+type AnomalyInfo struct {
+	UnitName            string             `json:"unit_name"`
+	Score               float64            `json:"score"`
+	Method              string             `json:"method,omitempty"`
+	ContributingMetrics map[string]float64 `json:"contributing_metrics,omitempty"`
+}
+
+type MLAnalysisResult struct {
+	AnomaliesDetected        []AnomalyInfo `json:"anomalies_detected"`
+	ModelsLoadedCount        int           `json:"models_loaded_count"`
+	UnitsAnalyzedCount       int           `json:"units_analyzed_count"`
+	SkippedZeroVarianceUnits []string      `json:"skipped_zero_variance_units"`
+	Error                    string        `json:"error,omitempty"`
+}
+
+type MemoryLeakInfo struct {
+	UnitName          string  `json:"unit_name"`
+	SlopeBytesPerHour float64 `json:"slope_bytes_per_hour"`
+	GrowthBytes       int64   `json:"growth_bytes"`
+	RSquared          float64 `json:"r_squared"`
+	Samples           int     `json:"samples"`
+}
+
+type MemoryLeakAnalysisResult struct {
+	SuspectedLeaks     []MemoryLeakInfo `json:"suspected_leaks"`
+	UnitsAnalyzedCount int              `json:"units_analyzed_count"`
+	Error              string           `json:"error,omitempty"`
+}
+
+// --- LLM ---
+
+type LLMAnalysisResult struct {
+	Synthesis            string `json:"synthesis,omitempty"`
+	PromptTokenCount     *int   `json:"prompt_token_count"`
+	CompletionTokenCount *int   `json:"completion_token_count"`
+	ModelUsed            string `json:"model_used,omitempty"`
+	ProviderUsed         string `json:"provider_used,omitempty"`
+	Error                string `json:"error,omitempty"`
+}
+
+// --- eBPF ---
+
+type EBPFExecEvent struct {
+	TimestampNs uint64   `json:"timestamp_ns"`
+	Pid         uint32   `json:"pid"`
+	Ppid        uint32   `json:"ppid"`
+	Comm        string   `json:"comm"`
+	CgroupID    uint64   `json:"cgroup_id"`
+	Filename    string   `json:"filename"`
+	Argv        []string `json:"argv"`
+}
+
+type EBPFExitEvent struct {
+	TimestampNs uint64 `json:"timestamp_ns"`
+	Pid         uint32 `json:"pid"`
+	Ppid        uint32 `json:"ppid"`
+	Comm        string `json:"comm"`
+	CgroupID    uint64 `json:"cgroup_id"`
+	ExitCode    int32  `json:"exit_code"`
+}
+
+type EBPFAnalysisResult struct {
+	ExecEvents     []EBPFExecEvent `json:"exec_events"`
+	ExitEvents     []EBPFExitEvent `json:"exit_events"`
+	UnitsWithExecs map[string]int  `json:"units_with_execs"`
+	UnitsWithExits map[string]int  `json:"units_with_exits"`
+	Error          string          `json:"error,omitempty"`
+}
+
+// SystemReport mirrors datatypes.SystemReport.
 type SystemReport struct {
-	Hostname         string                  `json:"hostname"`
-	Timestamp        string                  `json:"timestamp"`
-	BootID           string                  `json:"boot_id"`
-	HealthAnalysis   *HealthAnalysisResult   `json:"health_analysis,omitempty"`
-	ResourceAnalysis *ResourceAnalysisResult `json:"resource_analysis,omitempty"`
-	Errors           []string                `json:"errors"`
+	Hostname               string                        `json:"hostname"`
+	Timestamp              string                        `json:"timestamp"`
+	BootID                 string                        `json:"boot_id"`
+	BootAnalysis           *BootAnalysisResult           `json:"boot_analysis,omitempty"`
+	HealthAnalysis         *HealthAnalysisResult         `json:"health_analysis,omitempty"`
+	ResourceAnalysis       *ResourceAnalysisResult       `json:"resource_analysis,omitempty"`
+	LogAnalysis            *LogAnalysisResult            `json:"log_analysis,omitempty"`
+	DependencyAnalysis     *DependencyAnalysisResult     `json:"dependency_analysis,omitempty"`
+	FullDependencyAnalysis *FullDependencyAnalysisResult `json:"full_dependency_analysis,omitempty"`
+	MLAnalysis             *MLAnalysisResult             `json:"ml_analysis,omitempty"`
+	MemoryLeakAnalysis     *MemoryLeakAnalysisResult     `json:"memory_leak_analysis,omitempty"`
+	LLMAnalysis            *LLMAnalysisResult            `json:"llm_analysis,omitempty"`
+	EBPFAnalysis           *EBPFAnalysisResult           `json:"ebpf_analysis,omitempty"`
+	Errors                 []string                      `json:"errors"`
 }
