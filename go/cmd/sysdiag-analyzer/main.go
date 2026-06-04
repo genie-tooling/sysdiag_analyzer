@@ -6,28 +6,50 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/analyze/leak"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/analyze/stats"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/boot"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/deps"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/health"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/logs"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/resources"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/config"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/features"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/history"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/report"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/systemd"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/types"
 )
 
 var (
-	cfgPath    string
-	outputFmt  string
-	noSave     bool
-	enableEBPF bool
-	analyzeML  bool
-	since      string
+	cfgPath          string
+	outputFmt        string
+	noSave           bool
+	enableEBPF       bool
+	analyzeML        bool
+	analyzeFullGraph bool
+	since            string
 )
+
+// activeServiceSet returns .service units that have a live MainPID (the ML target set).
+func activeServiceSet(units []types.UnitHealthInfo) map[string]bool {
+	out := map[string]bool{}
+	for _, u := range units {
+		if !strings.HasSuffix(u.Name, ".service") {
+			continue
+		}
+		if pid, err := strconv.Atoi(u.Details["MainPID"]); err == nil && pid > 0 {
+			out[u.Name] = true
+		}
+	}
+	return out
+}
 
 func newReport() *types.SystemReport {
 	return &types.SystemReport{
@@ -66,16 +88,51 @@ func main() {
 		Short: "Run the full analysis.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+			cfg := config.Load(cfgPath)
 			units, err := systemd.ListUnits(ctx)
 			if err != nil {
 				return fmt.Errorf("listing units: %w", err)
 			}
 			r := newReport()
 			r.BootAnalysis = boot.Analyze()
-			r.HealthAnalysis = health.Analyze(ctx, units)
+			r.HealthAnalysis = health.Analyze(ctx, units) // populates unit Details (MainPID, NRestarts)
 			r.ResourceAnalysis = resources.Analyze(ctx, units)
 			r.LogAnalysis = logs.Analyze(0, logs.DefaultAnalysisLevel, since)
-			// TODO: deps; history persistence (--no-save), --analyze-ml, --enable-ebpf, --analyze-llm.
+
+			states := make(map[string]types.UnitHealthInfo, len(units))
+			for _, u := range units {
+				states[u.Name] = u
+			}
+			if len(r.HealthAnalysis.FailedUnits) > 0 {
+				r.DependencyAnalysis = deps.AnalyzeFailed(r.HealthAnalysis.FailedUnits, states)
+			}
+			if analyzeFullGraph {
+				names := make([]string, len(units))
+				for i, u := range units {
+					names[i] = u.Name
+				}
+				r.FullDependencyAnalysis = deps.AnalyzeFullGraph(names)
+			}
+			if analyzeML {
+				reports := append(history.Load(cfg.History.Directory, cfg.Models.HistoryWindow), r)
+				feats := features.Extract(reports)
+				active := activeServiceSet(units)
+				r.MLAnalysis = &types.MLAnalysisResult{
+					AnomaliesDetected:        stats.DetectAnomalies(feats, cfg.Models.Sensitivity, active),
+					UnitsAnalyzedCount:       len(active),
+					SkippedZeroVarianceUnits: []string{},
+				}
+				lk, n := leak.Detect(feats, nil)
+				r.MemoryLeakAnalysis = &types.MemoryLeakAnalysisResult{SuspectedLeaks: lk, UnitsAnalyzedCount: n}
+			}
+			if enableEBPF {
+				r.Errors = append(r.Errors, "eBPF tracing not yet available in this build (P5).")
+			}
+			if !noSave {
+				if err := history.Save(r, cfg.History.Directory, cfg.History.MaxFiles); err != nil {
+					r.Errors = append(r.Errors, "failed to save report: "+err.Error())
+				}
+			}
 			return emit(r)
 		},
 	}
@@ -83,6 +140,7 @@ func main() {
 	runCmd.Flags().BoolVar(&enableEBPF, "enable-ebpf", false, "Enable eBPF tracing (P5).")
 	runCmd.Flags().BoolVar(&analyzeML, "analyze-ml", false, "Statistical anomaly + leak detection (P2).")
 	runCmd.Flags().StringVar(&since, "since", "", "Restrict log analysis to entries since this time (journalctl --since).")
+	runCmd.Flags().BoolVar(&analyzeFullGraph, "analyze-full-graph", false, "Detect dependency cycles in the full graph.")
 
 	healthCmd := &cobra.Command{
 		Use:   "analyze-health",
@@ -133,6 +191,34 @@ func main() {
 	}
 	logsCmd.Flags().StringVar(&since, "since", "", "Restrict to entries since this time (journalctl --since).")
 
+	historyCmd := &cobra.Command{
+		Use:   "show-history",
+		Short: "List saved analysis reports.",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			cfg := config.Load(cfgPath)
+			reports := history.Load(cfg.History.Directory, 0)
+			if len(reports) == 0 {
+				fmt.Printf("No history found in %s\n", cfg.History.Directory)
+				return nil
+			}
+			for _, rep := range reports {
+				failed, anom, leaks := 0, 0, 0
+				if rep.HealthAnalysis != nil {
+					failed = len(rep.HealthAnalysis.FailedUnits)
+				}
+				if rep.MLAnalysis != nil {
+					anom = len(rep.MLAnalysis.AnomaliesDetected)
+				}
+				if rep.MemoryLeakAnalysis != nil {
+					leaks = len(rep.MemoryLeakAnalysis.SuspectedLeaks)
+				}
+				fmt.Printf("%s  %-20s  failed=%d anomalies=%d leaks=%d\n",
+					rep.Timestamp, rep.Hostname, failed, anom, leaks)
+			}
+			return nil
+		},
+	}
+
 	configCmd := &cobra.Command{Use: "config", Short: "Configuration commands."}
 	configShow := &cobra.Command{
 		Use:   "show",
@@ -145,7 +231,7 @@ func main() {
 	}
 	configCmd.AddCommand(configShow)
 
-	root.AddCommand(runCmd, healthCmd, resourcesCmd, bootCmd, logsCmd, configCmd)
+	root.AddCommand(runCmd, healthCmd, resourcesCmd, bootCmd, logsCmd, historyCmd, configCmd)
 	root.SetContext(context.Background())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

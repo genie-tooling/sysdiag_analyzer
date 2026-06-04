@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/types"
 )
@@ -91,6 +92,43 @@ func Text(r *types.SystemReport, w io.Writer) {
 			}
 			fmt.Fprintf(w, "  %-40s %12s %12s %6s %12s\n",
 				trunc(u.Name, 40), humanBytes(deref(u.MemoryCurrentByte)), limit, pctStr, anon)
+		}
+	}
+	if d := r.DependencyAnalysis; d != nil && len(d.FailedUnitDependencies) > 0 {
+		fmt.Fprintf(w, "\nDependencies of failed units:\n")
+		for _, fu := range d.FailedUnitDependencies {
+			var prob []string
+			for _, dep := range fu.Dependencies {
+				if dep.IsProblematic {
+					prob = append(prob, dep.Name)
+				}
+			}
+			if len(prob) > 0 {
+				fmt.Fprintf(w, "  %s → problematic: %s\n", fu.UnitName, strings.Join(prob, ", "))
+			}
+		}
+	}
+	if fd := r.FullDependencyAnalysis; fd != nil && len(fd.DetectedCycles) > 0 {
+		fmt.Fprintf(w, "\nDependency cycles (%d):\n", len(fd.DetectedCycles))
+		for _, c := range fd.DetectedCycles {
+			fmt.Fprintf(w, "  %s → %s\n", strings.Join(c, " → "), c[0])
+		}
+	}
+	if ml := r.MLAnalysis; ml != nil && len(ml.AnomaliesDetected) > 0 {
+		fmt.Fprintf(w, "\nAnomalies (%d):\n", len(ml.AnomaliesDetected))
+		for _, a := range ml.AnomaliesDetected {
+			var parts []string
+			for k, v := range a.ContributingMetrics {
+				parts = append(parts, fmt.Sprintf("%s z=%.1f", k, v))
+			}
+			fmt.Fprintf(w, "  %-40s score=%.1f [%s] %s\n", trunc(a.UnitName, 40), a.Score, a.Method, strings.Join(parts, ", "))
+		}
+	}
+	if lk := r.MemoryLeakAnalysis; lk != nil && len(lk.SuspectedLeaks) > 0 {
+		fmt.Fprintf(w, "\nSuspected memory leaks (%d):\n", len(lk.SuspectedLeaks))
+		for _, l := range lk.SuspectedLeaks {
+			fmt.Fprintf(w, "  %-40s %s/h  (R²=%.2f, n=%d)\n",
+				trunc(l.UnitName, 40), humanBytes(int64(l.SlopeBytesPerHour)), l.RSquared, l.Samples)
 		}
 	}
 }
