@@ -5,14 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/analyze/leak"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/analyze/llm"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/analyze/stats"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/boot"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/deps"
@@ -20,6 +24,7 @@ import (
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/logs"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/resources"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/config"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/exporter"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/features"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/history"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/report"
@@ -33,8 +38,12 @@ var (
 	noSave           bool
 	enableEBPF       bool
 	analyzeML        bool
+	analyzeLLM       bool
 	analyzeFullGraph bool
 	since            string
+	expHost          string
+	expPort          int
+	expInterval      int
 )
 
 // activeServiceSet returns .service units that have a live MainPID (the ML target set).
@@ -125,6 +134,9 @@ func main() {
 				lk, n := leak.Detect(feats, nil)
 				r.MemoryLeakAnalysis = &types.MemoryLeakAnalysisResult{SuspectedLeaks: lk, UnitsAnalyzedCount: n}
 			}
+			if analyzeLLM {
+				r.LLMAnalysis = llm.Analyze(r, cfg.LLM)
+			}
 			if enableEBPF {
 				r.Errors = append(r.Errors, "eBPF tracing not yet available in this build (P5).")
 			}
@@ -141,6 +153,7 @@ func main() {
 	runCmd.Flags().BoolVar(&analyzeML, "analyze-ml", false, "Statistical anomaly + leak detection (P2).")
 	runCmd.Flags().StringVar(&since, "since", "", "Restrict log analysis to entries since this time (journalctl --since).")
 	runCmd.Flags().BoolVar(&analyzeFullGraph, "analyze-full-graph", false, "Detect dependency cycles in the full graph.")
+	runCmd.Flags().BoolVar(&analyzeLLM, "analyze-llm", false, "LLM synthesis of the report (Ollama / OpenAI-compatible).")
 
 	healthCmd := &cobra.Command{
 		Use:   "analyze-health",
@@ -219,6 +232,24 @@ func main() {
 		},
 	}
 
+	exporterCmd := &cobra.Command{
+		Use:   "exporter",
+		Short: "Run a persistent Prometheus exporter.",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg := config.Load(cfgPath)
+			coll := exporter.New(cfg)
+			prometheus.MustRegister(coll)
+			go coll.RunPeriodic(cmd.Context(), time.Duration(expInterval)*time.Second)
+			http.Handle("/metrics", promhttp.Handler())
+			addr := fmt.Sprintf("%s:%d", expHost, expPort)
+			fmt.Printf("Prometheus exporter listening on http://%s/metrics (Ctrl-C to quit)\n", addr)
+			return http.ListenAndServe(addr, nil)
+		},
+	}
+	exporterCmd.Flags().StringVar(&expHost, "host", "0.0.0.0", "Bind address.")
+	exporterCmd.Flags().IntVar(&expPort, "port", 9822, "Port.")
+	exporterCmd.Flags().IntVarP(&expInterval, "interval", "i", 60, "Background refresh interval (seconds).")
+
 	configCmd := &cobra.Command{Use: "config", Short: "Configuration commands."}
 	configShow := &cobra.Command{
 		Use:   "show",
@@ -231,7 +262,7 @@ func main() {
 	}
 	configCmd.AddCommand(configShow)
 
-	root.AddCommand(runCmd, healthCmd, resourcesCmd, bootCmd, logsCmd, historyCmd, configCmd)
+	root.AddCommand(runCmd, healthCmd, resourcesCmd, bootCmd, logsCmd, historyCmd, exporterCmd, configCmd)
 	root.SetContext(context.Background())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

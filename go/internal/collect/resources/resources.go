@@ -13,12 +13,17 @@ import (
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
+	"github.com/shirou/gopsutil/v4/process"
 
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/systemd"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/types"
 )
 
-const topN = 10
+const (
+	topN            = 10
+	childMinMemMB   = 5.0  // CHILD_PROCESS_MIN_MEM_MB
+	childMinCPUSecs = 60.0 // CHILD_PROCESS_MIN_CPU_SECONDS
+)
 
 func pf(v float64) *float64 { return &v }
 func pi(v int64) *int64     { return &v }
@@ -187,6 +192,8 @@ func Analyze(_ context.Context, units []types.UnitHealthInfo) *types.ResourceAna
 		res.UnitUsage = append(res.UnitUsage, uu)
 	}
 
+	res.ChildProcessGroups = scanChildGroups(units)
+
 	res.TopMemoryUnits = topBy(res.UnitUsage, func(u types.UnitResourceUsage) int64 {
 		return deref(u.MemoryCurrentByte)
 	})
@@ -204,6 +211,107 @@ func deref(p *int64) int64 {
 		return 0
 	}
 	return *p
+}
+
+// scanChildGroups aggregates non-systemd-managed descendant processes of each
+// service's MainPID by command name (e.g. containers under docker.service),
+// linking them back to the parent unit. Mirrors _scan_and_group_child_processes.
+func scanChildGroups(units []types.UnitHealthInfo) []types.ChildProcessGroupUsage {
+	var services []string
+	for _, u := range units {
+		if strings.HasSuffix(u.Name, ".service") {
+			services = append(services, u.Name)
+		}
+	}
+	props := systemd.ShowProperties(services, []string{"MainPID"})
+
+	type acc struct {
+		unit, cmd string
+		pids      []int
+		mem       int64
+		cpu       float64
+	}
+	groups := map[string]*acc{}
+	for unit, kv := range props {
+		pid, err := strconv.Atoi(kv["MainPID"])
+		if err != nil || pid <= 0 {
+			continue
+		}
+		for _, cp := range descendants(int32(pid)) {
+			name, err := cp.Name()
+			if err != nil || name == "" {
+				continue
+			}
+			key := unit + "\x00" + name
+			a := groups[key]
+			if a == nil {
+				a = &acc{unit: unit, cmd: name}
+				groups[key] = a
+			}
+			a.pids = append(a.pids, int(cp.Pid))
+			if mi, err := cp.MemoryInfo(); err == nil && mi != nil {
+				a.mem += int64(mi.RSS)
+			}
+			if t, err := cp.Times(); err == nil && t != nil {
+				a.cpu += t.User + t.System
+			}
+		}
+	}
+
+	var out []types.ChildProcessGroupUsage
+	for _, a := range groups {
+		if float64(a.mem)/(1024*1024) < childMinMemMB && a.cpu < childMinCPUSecs {
+			continue
+		}
+		mem, cpu := a.mem, a.cpu
+		out = append(out, types.ChildProcessGroupUsage{
+			CommandName: a.cmd, ParentUnit: a.unit, ProcessCount: len(a.pids),
+			Pids: a.pids, AggregatedMemoryBytes: &mem, AggregatedCPUSecondsTot: &cpu,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ci, cj := derefF(out[i].AggregatedCPUSecondsTot), derefF(out[j].AggregatedCPUSecondsTot)
+		if ci != cj {
+			return ci > cj
+		}
+		return deref(out[i].AggregatedMemoryBytes) > deref(out[j].AggregatedMemoryBytes)
+	})
+	return out
+}
+
+func derefF(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// descendants returns all recursive child processes of pid (excluding pid itself).
+func descendants(pid int32) []*process.Process {
+	root, err := process.NewProcess(pid)
+	if err != nil {
+		return nil
+	}
+	var out []*process.Process
+	seen := map[int32]bool{}
+	queue := []*process.Process{root}
+	for len(queue) > 0 {
+		p := queue[0]
+		queue = queue[1:]
+		children, err := p.Children()
+		if err != nil {
+			continue
+		}
+		for _, c := range children {
+			if seen[c.Pid] {
+				continue
+			}
+			seen[c.Pid] = true
+			out = append(out, c)
+			queue = append(queue, c)
+		}
+	}
+	return out
 }
 
 func topBy(units []types.UnitResourceUsage, key func(types.UnitResourceUsage) int64) []types.UnitResourceUsage {

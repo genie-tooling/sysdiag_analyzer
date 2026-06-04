@@ -131,4 +131,11 @@ func Text(r *types.SystemReport, w io.Writer) {
 				trunc(l.UnitName, 40), humanBytes(int64(l.SlopeBytesPerHour)), l.RSquared, l.Samples)
 		}
 	}
+	if l := r.LLMAnalysis; l != nil {
+		if l.Error != "" {
+			fmt.Fprintf(w, "\nLLM (%s): error: %s\n", l.ProviderUsed, l.Error)
+		} else if l.Synthesis != "" {
+			fmt.Fprintf(w, "\nLLM synthesis (%s/%s):\n%s\n", l.ProviderUsed, l.ModelUsed, l.Synthesis)
+		}
+	}
 }
