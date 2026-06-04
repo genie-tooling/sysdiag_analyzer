@@ -154,42 +154,9 @@ func Analyze(_ context.Context, units []types.UnitHealthInfo) *types.ResourceAna
 	paths := systemd.ResolveCgroupPaths(names)
 
 	for _, u := range units {
-		rel, ok := paths[u.Name]
-		if !ok {
-			continue // no cgroup (sockets/targets/inactive) — skip, like Python's debug-skip
+		if rel, ok := paths[u.Name]; ok {
+			res.UnitUsage = append(res.UnitUsage, readUnitUsage(u.Name, rel))
 		}
-		uu := types.UnitResourceUsage{Name: u.Name, CgroupPath: rel}
-		if c, ok := systemd.ReadCgroupFile(rel, "cpu.stat"); ok {
-			uu.CPUUsageNsec = ParseCPUStat(c)
-		}
-		if c, ok := systemd.ReadCgroupFile(rel, "memory.current"); ok {
-			uu.MemoryCurrentByte = ParseMemoryInt(c)
-		}
-		if c, ok := systemd.ReadCgroupFile(rel, "memory.peak"); ok {
-			uu.MemoryPeakBytes = ParseMemoryInt(c)
-		}
-		if c, ok := systemd.ReadCgroupFile(rel, "memory.max"); ok {
-			uu.MemoryMaxBytes = ParseMemoryInt(c)
-		}
-		if c, ok := systemd.ReadCgroupFile(rel, "memory.high"); ok {
-			uu.MemoryHighBytes = ParseMemoryInt(c)
-		}
-		if c, ok := systemd.ReadCgroupFile(rel, "memory.stat"); ok {
-			stat := ParseMemoryStat(c)
-			if v, ok := stat["anon"]; ok {
-				uu.MemoryAnonBytes = pi(v)
-			}
-			if v, ok := stat["file"]; ok {
-				uu.MemoryFileBytes = pi(v)
-			}
-		}
-		if c, ok := systemd.ReadCgroupFile(rel, "io.stat"); ok {
-			uu.IOReadBytes, uu.IOWriteBytes = ParseIOStat(c)
-		}
-		if c, ok := systemd.ReadCgroupFile(rel, "cgroup.procs"); ok {
-			uu.TasksCurrent = ParseTasks(c)
-		}
-		res.UnitUsage = append(res.UnitUsage, uu)
 	}
 
 	res.ChildProcessGroups = scanChildGroups(units)
@@ -204,6 +171,67 @@ func Analyze(_ context.Context, units []types.UnitHealthInfo) *types.ResourceAna
 		return deref(u.IOReadBytes) + deref(u.IOWriteBytes)
 	})
 	return res
+}
+
+// readUnitUsage reads all cgroup v2 metric files for one unit.
+func readUnitUsage(name, rel string) types.UnitResourceUsage {
+	uu := types.UnitResourceUsage{Name: name, CgroupPath: rel}
+	if c, ok := systemd.ReadCgroupFile(rel, "cpu.stat"); ok {
+		uu.CPUUsageNsec = ParseCPUStat(c)
+	}
+	if c, ok := systemd.ReadCgroupFile(rel, "memory.current"); ok {
+		uu.MemoryCurrentByte = ParseMemoryInt(c)
+	}
+	if c, ok := systemd.ReadCgroupFile(rel, "memory.peak"); ok {
+		uu.MemoryPeakBytes = ParseMemoryInt(c)
+	}
+	if c, ok := systemd.ReadCgroupFile(rel, "memory.max"); ok {
+		uu.MemoryMaxBytes = ParseMemoryInt(c)
+	}
+	if c, ok := systemd.ReadCgroupFile(rel, "memory.high"); ok {
+		uu.MemoryHighBytes = ParseMemoryInt(c)
+	}
+	if c, ok := systemd.ReadCgroupFile(rel, "memory.stat"); ok {
+		stat := ParseMemoryStat(c)
+		if v, ok := stat["anon"]; ok {
+			uu.MemoryAnonBytes = pi(v)
+		}
+		if v, ok := stat["file"]; ok {
+			uu.MemoryFileBytes = pi(v)
+		}
+	}
+	if c, ok := systemd.ReadCgroupFile(rel, "io.stat"); ok {
+		uu.IOReadBytes, uu.IOWriteBytes = ParseIOStat(c)
+	}
+	if c, ok := systemd.ReadCgroupFile(rel, "cgroup.procs"); ok {
+		uu.TasksCurrent = ParseTasks(c)
+	}
+	return uu
+}
+
+// CollectUnitUsage is the fast per-unit read path for the live `top` view: it
+// resolves missing cgroup paths once into cache (negative results cached as "")
+// and re-reads only the cheap /sys files. No child-process scan.
+func CollectUnitUsage(units []types.UnitHealthInfo, cache map[string]string) []types.UnitResourceUsage {
+	var missing []string
+	for _, u := range units {
+		if _, ok := cache[u.Name]; !ok {
+			missing = append(missing, u.Name)
+		}
+	}
+	if len(missing) > 0 {
+		resolved := systemd.ResolveCgroupPaths(missing)
+		for _, name := range missing {
+			cache[name] = resolved[name] // "" if no cgroup (cached negative)
+		}
+	}
+	var out []types.UnitResourceUsage
+	for _, u := range units {
+		if rel := cache[u.Name]; rel != "" {
+			out = append(out, readUnitUsage(u.Name, rel))
+		}
+	}
+	return out
 }
 
 func deref(p *int64) int64 {
@@ -284,6 +312,34 @@ func derefF(p *float64) float64 {
 		return 0
 	}
 	return *p
+}
+
+// CgroupFDCount sums open file descriptors across a cgroup's direct processes
+// (best-effort; processes we can't inspect are skipped). nil if none readable.
+func CgroupFDCount(rel string) *int {
+	c, ok := systemd.ReadCgroupFile(rel, "cgroup.procs")
+	if !ok {
+		return nil
+	}
+	total, seen := 0, false
+	for _, line := range strings.Split(c, "\n") {
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil {
+			continue
+		}
+		p, err := process.NewProcess(int32(pid))
+		if err != nil {
+			continue
+		}
+		if n, err := p.NumFDs(); err == nil {
+			total += int(n)
+			seen = true
+		}
+	}
+	if !seen {
+		return nil
+	}
+	return &total
 }
 
 // descendants returns all recursive child processes of pid (excluding pid itself).

@@ -29,6 +29,7 @@ import (
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/history"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/report"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/systemd"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/tui"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/types"
 )
 
@@ -44,6 +45,9 @@ var (
 	expHost          string
 	expPort          int
 	expInterval      int
+	topSort          string
+	topCount         int
+	topInterval      int
 )
 
 // activeServiceSet returns .service units that have a live MainPID (the ML target set).
@@ -232,6 +236,18 @@ func main() {
 		},
 	}
 
+	topCmd := &cobra.Command{
+		Use:   "top",
+		Short: "Live, top-like view of per-unit cgroup usage (Ctrl-C/q to quit).",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return tui.Run(cmd.Context(), config.Load(cfgPath),
+				time.Duration(topInterval)*time.Second, topSort, topCount)
+		},
+	}
+	topCmd.Flags().IntVarP(&topInterval, "interval", "i", 2, "Refresh interval (seconds).")
+	topCmd.Flags().StringVarP(&topSort, "sort", "s", "mem", "Sort by: mem | cpu | io | limit.")
+	topCmd.Flags().IntVarP(&topCount, "count", "n", 25, "Number of units to display.")
+
 	exporterCmd := &cobra.Command{
 		Use:   "exporter",
 		Short: "Run a persistent Prometheus exporter.",
@@ -262,7 +278,7 @@ func main() {
 	}
 	configCmd.AddCommand(configShow)
 
-	root.AddCommand(runCmd, healthCmd, resourcesCmd, bootCmd, logsCmd, historyCmd, exporterCmd, configCmd)
+	root.AddCommand(runCmd, healthCmd, resourcesCmd, bootCmd, logsCmd, historyCmd, topCmd, exporterCmd, configCmd)
 	root.SetContext(context.Background())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
