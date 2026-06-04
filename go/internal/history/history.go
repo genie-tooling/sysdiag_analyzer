@@ -5,6 +5,7 @@ package history
 import (
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,12 +15,12 @@ import (
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/types"
 )
 
-// Save writes the report as report-<RFC3339>.json.gz and applies retention.
+// Save writes the report as report-<unixnano>.json.gz and applies retention.
 func Save(r *types.SystemReport, dir string, maxFiles int) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	name := "report-" + time.Now().UTC().Format("20060102T150405Z") + ".json.gz"
+	name := fmt.Sprintf("report-%d.json.gz", time.Now().UTC().UnixNano())
 	f, err := os.Create(filepath.Join(dir, name))
 	if err != nil {
 		return err
