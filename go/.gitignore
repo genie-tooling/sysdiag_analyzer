@@ -1,0 +1,4 @@
+# Go build artifacts
+/sysdiag-analyzer
+*.test
+*.out
