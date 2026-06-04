@@ -261,6 +261,26 @@ class MLAnalysisResult:
     error: Optional[str] = None
 
 
+@dataclass
+class MemoryLeakInfo:
+    """A suspected memory leak: sustained anon-memory growth for a unit."""
+
+    unit_name: str
+    slope_bytes_per_hour: float
+    growth_bytes: int
+    r_squared: float
+    samples: int
+
+
+@dataclass
+class MemoryLeakAnalysisResult:
+    """Aggregates suspected memory leaks detected from historical anon memory."""
+
+    suspected_leaks: List[MemoryLeakInfo] = field(default_factory=list)
+    units_analyzed_count: int = 0
+    error: Optional[str] = None
+
+
 # --- LLM Analysis Data Structures ---
 @dataclass
 class LLMAnalysisResult:
@@ -340,6 +360,7 @@ class SystemReport:
     dependency_analysis: Optional[DependencyAnalysisResult] = None
     full_dependency_analysis: Optional[FullDependencyAnalysisResult] = None
     ml_analysis: Optional[MLAnalysisResult] = None
+    memory_leak_analysis: Optional[MemoryLeakAnalysisResult] = None
     llm_analysis: Optional[LLMAnalysisResult] = None
     ebpf_analysis: Optional[EBPFAnalysisResult] = None
     errors: List[str] = field(default_factory=list)

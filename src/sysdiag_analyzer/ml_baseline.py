@@ -18,9 +18,9 @@ from __future__ import annotations
 import logging
 import statistics
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-from .datatypes import AnomalyInfo
+from .datatypes import AnomalyInfo, MemoryLeakInfo
 
 log = logging.getLogger(__name__)
 
@@ -176,3 +176,95 @@ def detect_anomalies_statistical(
 
     anomalies.sort(key=lambda a: a.score, reverse=True)
     return anomalies
+
+
+# --- Memory-leak detection (sustained anon-memory growth over history) ---
+
+LEAK_MIN_SAMPLES = 6
+LEAK_MIN_SLOPE_BYTES_PER_HOUR = 10 * 1024 * 1024  # 10 MiB/hour
+LEAK_MIN_R2 = 0.8
+_LEAK_RESET_DROP_FRAC = 0.7  # anon dropping below 70% of the prior sample = restart
+
+
+def _linear_fit(xs: List[float], ys: List[float]) -> Tuple[float, float]:
+    """Least-squares fit; returns (slope, r_squared)."""
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx == 0:
+        return 0.0, 0.0
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    ss_tot = sum((y - my) ** 2 for y in ys)
+    if ss_tot == 0:
+        return slope, 1.0  # perfectly flat (slope ~0)
+    intercept = my - slope * mx
+    ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys))
+    return slope, 1.0 - ss_res / ss_tot
+
+
+def detect_memory_leaks(
+    feature_dicts: List[Dict[str, Any]],
+    min_samples: int = LEAK_MIN_SAMPLES,
+    min_slope_bytes_per_hour: float = LEAK_MIN_SLOPE_BYTES_PER_HOUR,
+    min_r2: float = LEAK_MIN_R2,
+    only_units: Optional[Set[str]] = None,
+) -> Tuple[List[MemoryLeakInfo], int]:
+    """Flag units whose anonymous memory grows steadily over the report history.
+
+    For each unit, fit a line to its anon-memory series (restarting the window at
+    a large drop, i.e. a service restart) and flag a sustained positive slope with
+    a good fit. Anon-based, so reclaimable page cache is not mistaken for a leak.
+
+    Returns (suspected_leaks, units_analyzed).
+    """
+    by_unit: Dict[str, List[Tuple[float, float]]] = {}
+    for feat in feature_dicts:
+        if feat.get("source") != "resource_analysis":
+            continue
+        unit = feat.get("unit_name")
+        anon = feat.get("mem_anon_bytes")
+        ts = _parse_timestamp(feat.get("report_timestamp"))
+        if (
+            not unit
+            or (only_units is not None and unit not in only_units)
+            or not isinstance(anon, (int, float))
+            or ts is None
+        ):
+            continue
+        by_unit.setdefault(unit, []).append((ts, float(anon)))
+
+    leaks: List[MemoryLeakInfo] = []
+    analyzed = 0
+    for unit, points in by_unit.items():
+        points.sort(key=lambda p: p[0])
+        # Restart the window at the last large drop (service restart / counter reset).
+        start = 0
+        for i in range(1, len(points)):
+            if points[i][1] < points[i - 1][1] * _LEAK_RESET_DROP_FRAC:
+                start = i
+        seg = points[start:]
+        if len(seg) < min_samples:
+            continue
+        analyzed += 1
+        t0 = seg[0][0]
+        xs = [t - t0 for t, _ in seg]
+        ys = [y for _, y in seg]
+        slope_per_sec, r2 = _linear_fit(xs, ys)
+        slope_per_hour = slope_per_sec * 3600.0
+        growth = ys[-1] - ys[0]
+        if slope_per_hour >= min_slope_bytes_per_hour and r2 >= min_r2 and growth > 0:
+            leaks.append(
+                MemoryLeakInfo(
+                    unit_name=unit,
+                    slope_bytes_per_hour=slope_per_hour,
+                    growth_bytes=int(growth),
+                    r_squared=round(r2, 3),
+                    samples=len(seg),
+                )
+            )
+            log.info(
+                f"Suspected memory leak in '{unit}': "
+                f"{slope_per_hour / (1024 * 1024):.1f} MiB/hour (R^2={r2:.2f}, n={len(seg)})"
+            )
+    leaks.sort(key=lambda lk: lk.slope_bytes_per_hour, reverse=True)
+    return leaks, analyzed

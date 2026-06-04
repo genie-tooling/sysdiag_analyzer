@@ -30,6 +30,7 @@ from .datatypes import (
     LLMAnalysisResult,
     LogAnalysisResult,
     MLAnalysisResult,
+    MemoryLeakAnalysisResult,
     ResourceAnalysisResult,
     SystemReport,
     SingleUnitReport,
@@ -962,6 +963,41 @@ def format_ml_report(result: Optional[MLAnalysisResult], console: Console) -> No
         console.print(final_panel)
 
 
+def format_memory_leak_report(result: Optional[MemoryLeakAnalysisResult], console: Console) -> None:
+    """Formats suspected memory leaks (sustained anon-memory growth). Silent when
+    there is nothing to report, to avoid cluttering the run output."""
+    if not result:
+        return
+    if result.error:
+        console.print(
+            Panel(f"[red]Analysis Error: {result.error}[/red]",
+                  title="Memory Leak Analysis", border_style="red", expand=False)
+        )
+        return
+    if not result.suspected_leaks:
+        return
+    table = Table(
+        title=f"[bold red]Suspected Memory Leaks ({len(result.suspected_leaks)})[/bold red]",
+        show_header=True,
+        header_style="bold red",
+        expand=True,
+    )
+    table.add_column("Unit", style="yellow", no_wrap=True)
+    table.add_column("Anon growth/hour", justify="right", width=18)
+    table.add_column("Total growth", justify="right", width=14)
+    table.add_column("Fit R²", justify="right", width=8)
+    table.add_column("Samples", justify="right", width=8)
+    for lk in result.suspected_leaks:
+        table.add_row(
+            lk.unit_name,
+            f"{_format_bytes(int(lk.slope_bytes_per_hour))}/h",
+            _format_bytes(lk.growth_bytes),
+            f"{lk.r_squared:.2f}",
+            str(lk.samples),
+        )
+    console.print(Panel(Group(table), title="Memory Leak Analysis", border_style="yellow", expand=False))
+
+
 def format_llm_report(result: Optional[LLMAnalysisResult], console: Console) -> None:
     """Formats and prints the LLM Analysis results using Rich."""
     log.debug(f"format_llm_report called with result object: {result is not None}")
@@ -1255,6 +1291,8 @@ def format_rich_report(report: Optional[SystemReport], console: Console) -> None
         format_ebpf_report(report.ebpf_analysis, console)
     if report.ml_analysis:
         format_ml_report(report.ml_analysis, console)
+    if report.memory_leak_analysis:
+        format_memory_leak_report(report.memory_leak_analysis, console)
     if report.llm_analysis:
         format_llm_report(report.llm_analysis, console)
     if report.errors:

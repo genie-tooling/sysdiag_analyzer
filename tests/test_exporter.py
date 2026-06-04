@@ -74,12 +74,14 @@ def mock_full_system_report():
                     name="app.service",
                     cpu_usage_nsec=123450000000,
                     memory_current_bytes=100 * 1024 * 1024,
+                    memory_anon_bytes=80 * 1024 * 1024,
                     memory_max_bytes=200 * 1024 * 1024,  # -> 50% of limit
                     memory_high_bytes=150 * 1024 * 1024,
                 ),
                 UnitResourceUsage(
                     name="machine-qemu.scope",
                     memory_current_bytes=500 * 1024 * 1024,  # no limit set
+                    memory_anon_bytes=480 * 1024 * 1024,
                 ),
             ],
             top_cpu_units=[
@@ -165,6 +167,7 @@ def test_collector_collect_with_full_report(mock_config, mock_full_system_report
         "sysdiag_analyzer_unit_memory_current_bytes",
         "sysdiag_analyzer_unit_memory_max_bytes",
         "sysdiag_analyzer_unit_memory_high_bytes",
+        "sysdiag_analyzer_unit_memory_anon_bytes",
     ]
     for name in expected_metric_names:
         assert name in metrics_by_name, f"Metric '{name}' was not yielded"
@@ -223,6 +226,10 @@ def test_collector_collect_with_full_report(mock_config, mock_full_system_report
     assert max_by_unit == {"app.service": 200 * 1024 * 1024}
     # The unlimited scope has NO max series -> exactly the "no hard limit" signal.
     assert "machine-qemu.scope" not in max_by_unit
+    anon = metrics_by_name["sysdiag_analyzer_unit_memory_anon_bytes"]
+    anon_by_unit = {s.labels["unit"]: s.value for s in anon.samples}
+    assert anon_by_unit["app.service"] == 80 * 1024 * 1024
+    assert anon_by_unit["machine-qemu.scope"] == 480 * 1024 * 1024
 
     # --- Verify Log Patterns ---
     log_metric = metrics_by_name["sysdiag_analyzer_log_patterns_detected"]

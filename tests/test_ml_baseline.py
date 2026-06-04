@@ -102,6 +102,51 @@ def test_sensitivity_levels_are_monotonic():
     assert "moderate.svc" in hi              # z~4.0 >= 2.5
 
 
+def _anon_sample(unit, i, anon, step_minutes=60):
+    return {
+        "report_timestamp": (_BASE + datetime.timedelta(minutes=i * step_minutes)).isoformat(),
+        "unit_name": unit,
+        "source": "resource_analysis",
+        "mem_anon_bytes": anon,
+    }
+
+
+def test_detect_memory_leaks_flags_linear_growth():
+    # +100 MiB/hour across 8 hourly samples -> clear leak.
+    feats = [_anon_sample("leaky.service", i, (100 + i * 100) * MIB) for i in range(8)]
+    leaks, analyzed = ml_baseline.detect_memory_leaks(feats)
+    assert analyzed == 1
+    assert len(leaks) == 1
+    lk = leaks[0]
+    assert lk.unit_name == "leaky.service"
+    assert lk.slope_bytes_per_hour > 90 * MIB
+    assert lk.r_squared > 0.99
+    assert lk.samples == 8
+
+
+def test_detect_memory_leaks_ignores_flat():
+    feats = [_anon_sample("flat.service", i, 500 * MIB) for i in range(8)]
+    leaks, analyzed = ml_baseline.detect_memory_leaks(feats)
+    assert leaks == []
+    assert analyzed == 1  # analyzed but not flagged
+
+
+def test_detect_memory_leaks_resets_on_restart():
+    # 8 samples climbing, then a restart (drop) with only 3 post-restart samples.
+    feats = [_anon_sample("svc", i, (100 + i * 100) * MIB) for i in range(8)]
+    feats += [_anon_sample("svc", 8 + j, (100 + j * 100) * MIB) for j in range(3)]
+    leaks, analyzed = ml_baseline.detect_memory_leaks(feats)
+    # Only the post-restart tail (3 samples) is considered -> below min_samples.
+    assert leaks == []
+    assert analyzed == 0
+
+
+def test_detect_memory_leaks_insufficient_samples():
+    feats = [_anon_sample("svc", i, (100 + i * 100) * MIB) for i in range(4)]
+    leaks, analyzed = ml_baseline.detect_memory_leaks(feats)
+    assert leaks == [] and analyzed == 0
+
+
 def test_only_units_filter():
     n = ml_baseline.MIN_BASELINE_SAMPLES + 5
     feats = [_sample("a.svc", i, mem=(100 + (i % 5)) * MIB, cpu=i * 10**9) for i in range(n)]

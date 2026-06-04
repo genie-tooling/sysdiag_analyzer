@@ -44,6 +44,7 @@ eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, pyth
     *   **Statistical (default, zero-setup):** a robust per-unit, per-metric detector (median + MAD *modified z-score*) that needs **no training, no model files, and no extra dependencies** — it works out of the box from ~a dozen historical reports. Cumulative cgroup counters (CPU, I/O) are converted to **rates** first, so it models behaviour rather than uptime, and a reboot (counter reset) isn't mistaken for an anomaly. Each anomaly reports **which metric(s)** drove it.
     *   **LSTM autoencoder (opt-in deep mode):** a per-unit temporal model for sites with lots of history. Requires the `.[ml]` extra (TensorFlow) and a prior `retrain-ml`; select it with `[models].method = "lstm"`. Excludes device/slice/scope units by default (`--train-devices` to include).
     *   Sensitivity is tunable via `[models].sensitivity` (`low` / `medium` / `high`).
+*   **Memory-Leak Detection:** flags units whose **anonymous** memory grows steadily across the report history (e.g. a leaking service or VM/`virtiofsd` scope), reporting the growth rate — reclaimable page cache is excluded, and the window resets on restart. Shown by `run --analyze-ml`; the exporter also exposes per-unit anon memory (`unit_memory_anon_bytes`) for trending in Prometheus.
 *   **LLM Synthesis (Optional):** Synthesizes the report with a local LLM via Ollama (`.[llm]` extra) or any OpenAI-compatible endpoint — OpenAI, vLLM, llama.cpp, LocalAI (`.[openai]` extra).
 
 ## Prerequisites

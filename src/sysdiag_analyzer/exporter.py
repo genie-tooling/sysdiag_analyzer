@@ -208,6 +208,13 @@ class SysdiagCollector:
             "Soft memory limit (cgroup memory.high / MemoryHigh) of a systemd unit; absent when unset.",
             labels=["unit"],
         )
+        unit_mem_anon = GaugeMetricFamily(
+            f"{METRICS_PREFIX}unit_memory_anon_bytes",
+            "Anonymous (non-reclaimable, process) memory of a systemd unit, from "
+            "memory.stat. A sustained rise here is a leak signal (deriv() in PromQL); "
+            "unlike memory.current it excludes reclaimable page cache.",
+            labels=["unit"],
+        )
 
         with self.lock:
             report = self.cached_report
@@ -281,12 +288,16 @@ class SysdiagCollector:
                     unit_mem_max.add_metric([unit.name], unit.memory_max_bytes)
                 if unit.memory_high_bytes is not None:
                     unit_mem_high.add_metric([unit.name], unit.memory_high_bytes)
+                if unit.memory_anon_bytes is not None:
+                    unit_mem_anon.add_metric([unit.name], unit.memory_anon_bytes)
             if unit_mem_current.samples:
                 yield unit_mem_current
             if unit_mem_max.samples:
                 yield unit_mem_max
             if unit_mem_high.samples:
                 yield unit_mem_high
+            if unit_mem_anon.samples:
+                yield unit_mem_anon
 
         # --- Log Metrics ---
         if report.log_analysis and report.log_analysis.detected_patterns:

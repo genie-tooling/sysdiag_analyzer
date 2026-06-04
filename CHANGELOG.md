@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-06-04
+
+### Added
+- **Historical memory-leak detection.** `run --analyze-ml` fits a line to each
+  unit's anonymous-memory series across the report history and flags sustained
+  growth (≥10 MiB/hour with a good fit, R² ≥ 0.8) in a "Suspected Memory Leaks"
+  section — the durable answer to "is this unit (e.g. a virtiofsd / VM scope)
+  leaking over days?". Anon-based, so reclaimable page cache isn't mistaken for a
+  leak; the window resets on a service restart. New `ml_baseline.detect_memory_leaks`
+  and `MemoryLeakInfo` / `MemoryLeakAnalysisResult` datatypes.
+- Exporter metric `unit_memory_anon_bytes` — graph it or `deriv()` it in PromQL for
+  a continuous leak trend. Feature extraction now carries `mem_anon_bytes`.
+
 ## [0.14.0] - 2026-06-04
 
 ### Added

@@ -73,10 +73,13 @@ SYSDIAG-ANALYZER(1)
                      which might be inaccurate on some systemd versions.
 
               **--analyze-ml**
-                     Perform Machine Learning-based anomaly detection on unit
-                     metrics compared to historical data. Requires pre-trained
-                     models (see `retrain-ml` command) and the ML dependencies
-                     to be installed (`sysdiag-analyzer[ml]` extra).
+                     Detect anomalies in unit metrics relative to historical
+                     reports, and flag units with sustained anonymous-memory
+                     growth as suspected memory leaks. Uses the default
+                     statistical method (no training, no extra dependencies);
+                     set `[models].method = "lstm"` for the deep model, which
+                     requires the `sysdiag-analyzer[ml]` extra and a prior
+                     `retrain-ml`. Tune with `[models].sensitivity`.
 
               **--analyze-llm**
                      Perform Large Language Model-based synthesis of the

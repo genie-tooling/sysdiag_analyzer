@@ -125,6 +125,7 @@ def extract_features_from_report(
                     "source": "resource_analysis",
                     "cpu_usage_nsec": unit_usage.get("cpu_usage_nsec"),
                     "mem_current_bytes": unit_usage.get("memory_current_bytes"),
+                    "mem_anon_bytes": unit_usage.get("memory_anon_bytes"),
                     "mem_peak_bytes": unit_usage.get("memory_peak_bytes"),
                     "io_read_bytes": unit_usage.get("io_read_bytes"),
                     "io_write_bytes": unit_usage.get("io_write_bytes"),

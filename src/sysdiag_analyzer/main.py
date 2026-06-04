@@ -30,6 +30,7 @@ from .datatypes import (
     DependencyAnalysisResult,
     FullDependencyAnalysisResult,
     MLAnalysisResult,
+    MemoryLeakAnalysisResult,
     LLMAnalysisResult,
     EBPFAnalysisResult,
     BootTimes,
@@ -497,6 +498,12 @@ def run_full_analysis(
                     ml_result.units_analyzed_count = len(active_service_names)
                     ml_result.anomalies_detected = ml_baseline.detect_anomalies_statistical(
                         feats, sensitivity=ml_sensitivity, only_units=active_service_names
+                    )
+                    # Sustained anon-memory growth over the history window (all
+                    # units, incl. slices/scopes — e.g. a leaking VM/virtiofsd scope).
+                    leaks, leak_n = ml_baseline.detect_memory_leaks(feats)
+                    report.memory_leak_analysis = MemoryLeakAnalysisResult(
+                        suspected_leaks=leaks, units_analyzed_count=leak_n
                     )
                 else:
                     log.info(
