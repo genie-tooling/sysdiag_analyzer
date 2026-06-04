@@ -165,11 +165,14 @@ SYSDIAG-ANALYZER(1)
        
        **top** \[*OPTIONS*]
               Display a live, top-like view of per-unit cgroup resource usage
-              that refreshes until interrupted (Ctrl-C). Shows memory, CPU, I/O
-              and task counts per unit alongside the configured memory limit and
-              percentage-of-limit; failed units are highlighted and cgroups with
-              no memory limit are flagged. Full per-unit data needs DBus/cgroup
-              access (run with sudo); system-wide stats are always shown.
+              that refreshes until interrupted (Ctrl-C). Shows CPU %, memory
+              (with an anon-vs-reclaimable-cache split and trend), the configured
+              memory limit and percentage-of-limit, I/O rate, task and open
+              file-descriptor counts; the header shows system-wide network rate.
+              Failed units are highlighted, cgroups with no memory limit are
+              flagged, and a unit whose anonymous memory climbs steadily across
+              the rolling window is marked LEAK?. Full per-unit data needs
+              DBus/cgroup access (run with sudo); system-wide stats are always shown.
 
               **OPTIONS for top:**
 

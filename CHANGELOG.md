@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-06-04
+
+### Added
+- **`top` is now a real live monitor.** Each refresh derives **CPU %** and **I/O
+  rates** from the cumulative counters; memory is split into **anon** (process
+  memory) vs reclaimable **cache** via `memory.stat`, with a trend arrow; open
+  **file-descriptor** counts are shown for the displayed units; and the header
+  shows **system-wide network rate**. A unit whose anonymous memory climbs steadily
+  across the rolling window is flagged **`LEAK?`** — anon-based, so reclaimable page
+  cache isn't mistaken for a leak, and it resets on restart.
+- `UnitResourceUsage` gains `memory_anon_bytes` / `memory_file_bytes`; `resources`
+  gains `get_cgroup_fd_count` and `_parse_cgroup_memory_stat`; `tui` gains a
+  `TopState` (rolling history → rates/trends/leak flag).
+
+### Changed
+- "Cgroup directory not present" (inactive services, idle sockets) is now logged at
+  debug instead of warning, reducing noise in `analyze-resources` / `run`.
+
 ## [0.13.1] - 2026-06-03
 
 ### Fixed

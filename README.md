@@ -25,7 +25,7 @@ eBPF requires a bit of extra OS packages like eBPF tooling, kernel headers, pyth
 
 ## Features
 
-*   **Live `top` View:** `sysdiag-analyzer top` — a continuously refreshing, top-like table of per-unit cgroup usage (memory, CPU, I/O, tasks) with memory **limit** / **%-of-limit** columns, sortable by `mem`/`cpu`/`io`/`limit`; failed units are highlighted and uncapped cgroups flagged.
+*   **Live `top` View:** `sysdiag-analyzer top` — a continuously refreshing, top-like table of per-unit cgroup usage: **CPU %**, memory (with an **anon vs. reclaimable cache** split + trend), memory **limit** / **%-of-limit**, **I/O rate**, tasks, and open **file descriptors**; sortable by `mem`/`cpu`/`io`/`limit`. The header shows system-wide network rate, failed units are highlighted, uncapped cgroups are flagged, and a unit whose anonymous memory climbs steadily is marked **`LEAK?`**.
 *   **Boot Analysis:** Timing breakdown, unit activation times, critical chain.
 *   **Service Health Checks:** Failed/flapping units, socket/timer issues. (DBus/cysystemd preferred)
 *   **Resource Utilization Monitoring:**

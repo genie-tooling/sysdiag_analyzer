@@ -177,6 +177,43 @@ def _parse_cgroup_memory(content: Optional[str]) -> Optional[int]:
         return None
 
 
+def _parse_cgroup_memory_stat(content: Optional[str]) -> Dict[str, int]:
+    """Parse 'key value' lines from memory.stat into a dict (e.g. anon, file)."""
+    stats: Dict[str, int] = {}
+    if not content:
+        return stats
+    for line in content.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            stats[parts[0]] = int(parts[1])
+    return stats
+
+
+def get_cgroup_fd_count(relative_cgroup_path: str) -> Optional[int]:
+    """Best-effort count of open file descriptors across a cgroup's processes.
+
+    Sums psutil num_fds() over the PIDs in cgroup.procs. Returns None if the
+    cgroup has no readable procs; processes we can't inspect (permissions, exited)
+    are skipped. Reading other users' fds requires root, so this is best-effort.
+    """
+    full = CGROUP_BASE_PATH / relative_cgroup_path / "cgroup.procs"
+    content = _read_cgroup_file(full)
+    if not content:
+        return None
+    total = 0
+    seen = False
+    for line in content.splitlines():
+        line = line.strip()
+        if not line.isdigit():
+            continue
+        try:
+            total += psutil.Process(int(line)).num_fds()
+            seen = True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess, OSError):
+            continue
+    return total if seen else None
+
+
 def _parse_cgroup_io_stat(content: Optional[str]) -> Tuple[Optional[int], Optional[int]]:
     """Parses and sums 'rbytes' and 'wbytes' from io.stat content.
 
@@ -697,8 +734,10 @@ def get_unit_resource_usage(
         usage.cgroup_path = relative_cgroup_path
         full_cgroup_path = CGROUP_BASE_PATH / relative_cgroup_path
         if not full_cgroup_path.is_dir():
-            log_cgroup.warning(
-                f"Specific cgroup directory not found: {full_cgroup_path}. Skipping resource collection for {unit_name}."
+            # Expected for many units (inactive services, sockets without a live
+            # connection, etc.) — debug, not a warning, to avoid log noise.
+            log_cgroup.debug(
+                f"Cgroup directory not present: {full_cgroup_path}. Skipping resource collection for {unit_name}."
             )
             results.append(usage)
             continue
@@ -723,6 +762,10 @@ def get_unit_resource_usage(
         mem_high_content = _read_cgroup_file(full_cgroup_path / "memory.high")
         usage.memory_max_bytes = _parse_cgroup_memory(mem_max_content)
         usage.memory_high_bytes = _parse_cgroup_memory(mem_high_content)
+        # memory.stat: split anon (process memory) from file (reclaimable cache).
+        mem_stat = _parse_cgroup_memory_stat(_read_cgroup_file(full_cgroup_path / "memory.stat"))
+        usage.memory_anon_bytes = mem_stat.get("anon")
+        usage.memory_file_bytes = mem_stat.get("file")
         log_cgroup.debug(
             f"Calling _parse_cgroup_io_stat for {unit_name} with content (snippet): {io_stat_content[:100] if io_stat_content else 'None'}..."
         )

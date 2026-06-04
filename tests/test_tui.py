@@ -78,3 +78,53 @@ def test_run_top_silences_then_restores_logging():
         tui.run_top({}, interval=0)
     # Global logging disable level is back to 0 (NOTSET).
     assert logging.getLogger().manager.disable == 0
+
+
+# --- TopState: rates, trends, leak detection ---
+
+def test_topstate_cpu_pct_and_io_rate():
+    st = tui.TopState()
+    st.update([UnitResourceUsage(name="a", cpu_usage_nsec=0, io_read_bytes=0, io_write_bytes=0)], now=0.0)
+    # 1s later: +0.5s CPU (5e8 ns) -> 50%; +1 MiB read.
+    later = UnitResourceUsage(name="a", cpu_usage_nsec=500_000_000, io_read_bytes=1024 * 1024, io_write_bytes=0)
+    d = st.update([later], now=1.0)["a"]
+    assert abs(d.cpu_pct - 50.0) < 1e-6
+    assert abs(d.io_read_rate - 1024 * 1024) < 1e-6
+
+
+def test_topstate_flags_anon_leak_and_resets_on_drop():
+    st = tui.TopState(window=4)
+    base = 100 * 1024 * 1024
+    d = {}
+    for i in range(4):  # steady climb of 50 MiB/step across a full window
+        d = st.update([UnitResourceUsage(name="leak", memory_anon_bytes=base + i * 50 * 1024 * 1024)], now=float(i))
+    assert d["leak"].leaking is True
+    # A drop (restart) clears the suspicion.
+    d = st.update([UnitResourceUsage(name="leak", memory_anon_bytes=base)], now=4.0)
+    assert d["leak"].leaking is False
+
+
+def test_topstate_no_leak_when_flat():
+    st = tui.TopState(window=4)
+    d = {}
+    for i in range(4):
+        d = st.update([UnitResourceUsage(name="flat", memory_anon_bytes=100 * 1024 * 1024)], now=float(i))
+    assert d["flat"].leaking is False
+
+
+def test_topstate_net_rate():
+    st = tui.TopState()
+    assert st.net_rate(SystemResourceUsage(net_io_sent_bytes=0, net_io_recv_bytes=0), 0.0) == (None, None)
+    up, down = st.net_rate(SystemResourceUsage(net_io_sent_bytes=1000, net_io_recv_bytes=2000), 1.0)
+    assert up == 1000.0 and down == 2000.0
+
+
+def test_build_top_view_shows_cpu_pct_leak_and_net():
+    units = [UnitResourceUsage(name="x.service", memory_current_bytes=GIB, memory_anon_bytes=GIB)]
+    derived = {"x.service": tui.TopDerived(cpu_pct=42.0, leaking=True, mem_trend="▲", fd_count=128)}
+    out = _render(tui.build_top_view(None, units, derived=derived, net_rate=(1000.0, 2000.0)))
+    assert "42.0" in out          # CPU%
+    assert "LEAK?" in out         # leak badge
+    assert "leaks?:1" in out      # header leak count
+    assert "128" in out           # fd count
+    assert "Net" in out           # system net rate in header

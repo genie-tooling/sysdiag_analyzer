@@ -491,3 +491,29 @@ def test_resolve_cgroup_paths_uses_systemctl_when_no_dbus(mock_systemctl):
     out = resources._resolve_cgroup_paths(["a.service"], dbus_manager=None)
     assert out == {"a.service": "system.slice/a.service"}
     mock_systemctl.assert_called_once_with(["a.service"])
+
+
+# --- memory.stat (anon vs cache) + fd counting ---
+
+def test_parse_cgroup_memory_stat():
+    content = "anon 1024\nfile 2048\nslab 99\nmalformed line\nshmem 16\n"
+    stats = resources._parse_cgroup_memory_stat(content)
+    assert stats["anon"] == 1024
+    assert stats["file"] == 2048
+    assert stats["shmem"] == 16
+    assert resources._parse_cgroup_memory_stat(None) == {}
+    assert resources._parse_cgroup_memory_stat("") == {}
+
+
+@patch("sysdiag_analyzer.modules.resources.psutil.Process")
+@patch("sysdiag_analyzer.modules.resources._read_cgroup_file", return_value="100\n200\n")
+def test_get_cgroup_fd_count_sums_over_pids(mock_read, mock_proc):
+    inst = MagicMock()
+    inst.num_fds.return_value = 7
+    mock_proc.return_value = inst
+    assert resources.get_cgroup_fd_count("system.slice/a.service") == 14  # 7 + 7
+
+
+@patch("sysdiag_analyzer.modules.resources._read_cgroup_file", return_value=None)
+def test_get_cgroup_fd_count_no_procs(mock_read):
+    assert resources.get_cgroup_fd_count("x") is None

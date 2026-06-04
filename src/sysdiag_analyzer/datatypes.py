@@ -119,6 +119,10 @@ class UnitResourceUsage:
     # cgroup memory limits. None means "max" (unlimited) or not readable.
     memory_max_bytes: Optional[int] = None   # memory.max (hard limit / MemoryMax)
     memory_high_bytes: Optional[int] = None  # memory.high (soft throttle / MemoryHigh)
+    # memory.stat breakdown: anon = process memory (leak-relevant), file =
+    # reclaimable page cache (e.g. what virtiofsd drives — not a leak).
+    memory_anon_bytes: Optional[int] = None
+    memory_file_bytes: Optional[int] = None
     io_read_bytes: Optional[int] = None
     io_write_bytes: Optional[int] = None
     tasks_current: Optional[int] = None
