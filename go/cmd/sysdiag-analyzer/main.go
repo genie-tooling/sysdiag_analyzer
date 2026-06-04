@@ -24,6 +24,7 @@ import (
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/logs"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/resources"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/config"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/ebpf"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/exporter"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/features"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/history"
@@ -142,7 +143,7 @@ func main() {
 				r.LLMAnalysis = llm.Analyze(r, cfg.LLM)
 			}
 			if enableEBPF {
-				r.Errors = append(r.Errors, "eBPF tracing not yet available in this build (P5).")
+				r.EBPFAnalysis = ebpf.Run(ctx, 5*time.Second)
 			}
 			if !noSave {
 				if err := history.Save(r, cfg.History.Directory, cfg.History.MaxFiles); err != nil {
