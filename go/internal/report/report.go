@@ -152,9 +152,9 @@ func trunc(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-// newTable builds a rounded, accent-headed table; columns in rightCols are
-// right-aligned (numeric), the rest left-aligned.
-func newTable(headers []string, rightCols ...int) *table.Table {
+// themedTable builds a rounded table whose header row is bold in the given
+// accent color; columns in rightCols are right-aligned (numeric).
+func themedTable(accent lipgloss.Color, headers []string, rightCols ...int) *table.Table {
 	right := map[int]bool{}
 	for _, c := range rightCols {
 		right[c] = true
@@ -169,10 +169,39 @@ func newTable(headers []string, rightCols ...int) *table.Table {
 				st = st.Align(lipgloss.Right)
 			}
 			if row == table.HeaderRow {
-				st = st.Bold(true).Foreground(ui.Accent)
+				st = st.Bold(true).Foreground(accent)
 			}
 			return st
 		})
+}
+
+// newTable is the default accent-headed table.
+func newTable(headers []string, rightCols ...int) *table.Table {
+	return themedTable(ui.Accent, headers, rightCols...)
+}
+
+func stateLAS(u types.UnitHealthInfo) string {
+	return fmt.Sprintf("%s/%s/%s", orDash(u.LoadState), orDash(u.ActiveState), orDash(u.SubState))
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// lastLog returns the most recent journal line for a unit, trimmed of its
+// "TIMESTAMP HOST " prefix and truncated, for a compact table cell.
+func lastLog(u types.UnitHealthInfo) string {
+	if len(u.RecentLogs) == 0 {
+		return ui.DimS.Render("—")
+	}
+	line := u.RecentLogs[len(u.RecentLogs)-1]
+	if parts := strings.SplitN(line, " ", 3); len(parts) == 3 {
+		line = parts[2] // drop "<iso-ts> <host> "
+	}
+	return ui.DimS.Render(trunc(line, 48))
 }
 
 // Text writes a styled, colorful summary of the populated report sections.
@@ -257,23 +286,50 @@ func renderHealth(r *types.SystemReport, w io.Writer) {
 	if h == nil {
 		return
 	}
-	fmt.Fprintln(w, ui.Section("Health"))
-	fmt.Fprintf(w, "  %s %d failed    %s %d flapping    %s %d units total\n",
+	fmt.Fprintln(w, ui.Section("Service Health"))
+	fmt.Fprintf(w, "  %s %d failed   %s %d flapping   %s %d sockets   %s %d timers   %s %d units\n",
 		ui.Dot(ui.BadS), len(h.FailedUnits), ui.Dot(ui.WarnS), len(h.FlappingUnits),
+		ui.Dot(ui.OrangeS), len(h.ProblematicSockets), ui.Dot(ui.CyanS), len(h.ProblematicTimers),
 		ui.Dot(ui.GoodS), h.AllUnitsCount)
-	if len(h.FailedUnits) == 0 && len(h.FlappingUnits) == 0 {
-		return
+
+	if len(h.FailedUnits) > 0 {
+		fmt.Fprintln(w, ui.Title(fmt.Sprintf("Failed Units (%d)", len(h.FailedUnits)), ui.Bad))
+		t := themedTable(ui.Bad, []string{"UNIT", "LOAD", "ACTIVE", "SUB", "DETAIL / RESULT", "RECENT"})
+		for _, u := range h.FailedUnits {
+			detail := u.Details["Result"]
+			if detail == "" {
+				detail = u.Description
+			}
+			t.Row(trunc(u.Name, 34), orDash(u.LoadState), orDash(u.ActiveState), orDash(u.SubState),
+				trunc(detail, 24), lastLog(u))
+		}
+		fmt.Fprintln(w, t)
 	}
-	t := newTable([]string{"", "UNIT", "STATE", "DETAIL"})
-	for _, u := range h.FailedUnits {
-		t.Row(ui.BadS.Render("✗"), trunc(u.Name, 44),
-			ui.BadS.Render(fmt.Sprintf("%s/%s", u.ActiveState, u.SubState)), u.Description)
+	if len(h.FlappingUnits) > 0 {
+		fmt.Fprintln(w, ui.Title(fmt.Sprintf("Flapping Units (%d)", len(h.FlappingUnits)), ui.Warn))
+		t := themedTable(ui.Warn, []string{"UNIT", "RESTARTS", "STATE (L/A/S)", "RECENT"}, 1)
+		for _, u := range h.FlappingUnits {
+			t.Row(trunc(u.Name, 34), orDash(u.Details["NRestarts"]), stateLAS(u), lastLog(u))
+		}
+		fmt.Fprintln(w, t)
 	}
-	for _, u := range h.FlappingUnits {
-		t.Row(ui.WarnS.Render("≈"), trunc(u.Name, 44),
-			ui.WarnS.Render("flapping"), "restarts="+u.Details["NRestarts"])
+	if len(h.ProblematicSockets) > 0 {
+		fmt.Fprintln(w, ui.Title(fmt.Sprintf("Problematic Sockets (%d)", len(h.ProblematicSockets)), ui.Orange))
+		t := themedTable(ui.Orange, []string{"SOCKET", "STATE (L/A/S)", "ISSUE", "RECENT"})
+		for _, u := range h.ProblematicSockets {
+			t.Row(trunc(u.Name, 30), stateLAS(u), trunc(u.ErrorMessage, 32), lastLog(u))
+		}
+		fmt.Fprintln(w, t)
 	}
-	fmt.Fprintln(w, t)
+	if len(h.ProblematicTimers) > 0 {
+		fmt.Fprintln(w, ui.Title(fmt.Sprintf("Problematic Timers (%d)", len(h.ProblematicTimers)), ui.Cyan))
+		t := themedTable(ui.Cyan, []string{"TIMER", "STATE (L/A/S)", "ISSUE", "RECENT"})
+		for _, u := range h.ProblematicTimers {
+			t.Row(trunc(u.Name, 30), stateLAS(u), trunc(u.ErrorMessage, 32), lastLog(u))
+		}
+		fmt.Fprintln(w, t)
+	}
+	fmt.Fprintln(w, ui.DimS.Render(fmt.Sprintf("  analyzed %d units", h.AllUnitsCount)))
 }
 
 func renderTopMemory(r *types.SystemReport, w io.Writer) {
@@ -324,7 +380,7 @@ func renderAnomalies(r *types.SystemReport, w io.Writer) {
 		return
 	}
 	fmt.Fprintln(w, ui.Section(fmt.Sprintf("Anomalies  (%d)", len(ml.AnomaliesDetected))))
-	t := newTable([]string{"UNIT", "SCORE", "METHOD", "CONTRIBUTING"}, 1)
+	t := themedTable(ui.Warn, []string{"UNIT", "SCORE", "METHOD", "CONTRIBUTING"}, 1)
 	for _, a := range ml.AnomaliesDetected {
 		keys := make([]string, 0, len(a.ContributingMetrics))
 		for k := range a.ContributingMetrics {
@@ -347,7 +403,7 @@ func renderLeaks(r *types.SystemReport, w io.Writer) {
 		return
 	}
 	fmt.Fprintln(w, ui.Section(fmt.Sprintf("Suspected memory leaks  (%d)", len(lk.SuspectedLeaks))))
-	t := newTable([]string{"UNIT", "GROWTH/h", "R²", "SAMPLES"}, 1, 2, 3)
+	t := themedTable(ui.Bad, []string{"UNIT", "GROWTH/h", "R²", "SAMPLES"}, 1, 2, 3)
 	for _, l := range lk.SuspectedLeaks {
 		t.Row(trunc(l.UnitName, 44),
 			ui.BadS.Render(humanBytes(int64(l.SlopeBytesPerHour))+"/h"),

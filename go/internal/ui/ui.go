@@ -10,9 +10,10 @@ import "github.com/charmbracelet/lipgloss"
 // A Tokyo-Night-inspired palette: easy on the eyes on a dark terminal.
 var (
 	Accent = lipgloss.Color("#7AA2F7") // blue   — titles, headers, structure
-	Cyan   = lipgloss.Color("#7DCFFF") // cyan   — secondary accent
+	Cyan   = lipgloss.Color("#7DCFFF") // cyan   — secondary accent / timers
 	Good   = lipgloss.Color("#9ECE6A") // green  — healthy / low
-	Warn   = lipgloss.Color("#E0AF68") // amber  — warning / elevated
+	Warn   = lipgloss.Color("#E0AF68") // amber  — warning / flapping / elevated
+	Orange = lipgloss.Color("#FF9E64") // orange — problematic sockets
 	Bad    = lipgloss.Color("#F7768E") // red    — failed / critical / leak
 	Muted  = lipgloss.Color("#565F89") // grey   — secondary / "n/a"
 )
@@ -26,8 +27,14 @@ var (
 	WarnS   = lipgloss.NewStyle().Foreground(Warn)
 	BadS    = lipgloss.NewStyle().Foreground(Bad)
 	CyanS   = lipgloss.NewStyle().Foreground(Cyan)
+	OrangeS = lipgloss.NewStyle().Foreground(Orange)
 	BorderS = lipgloss.NewStyle().Foreground(Muted)
 )
+
+// Title renders a bold, colored table title line (rich-style, above a table).
+func Title(s string, c lipgloss.Color) string {
+	return lipgloss.NewStyle().Bold(true).Foreground(c).Render(s)
+}
 
 // Section renders a section heading: an accent bar followed by a bold label.
 func Section(label string) string {
