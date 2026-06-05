@@ -52,6 +52,7 @@ var (
 	expHost          string
 	expPort          int
 	expInterval      int
+	expEnableEBPF    bool
 	topSort          string
 	topCount         int
 	topInterval      int
@@ -83,6 +84,9 @@ func runSingleUnit(_ context.Context, unitName string) *types.SingleUnitReport {
 	rep.UnitInfo = &u
 	if usages := resources.CollectUnitUsage([]types.UnitHealthInfo{u}, map[string]string{}); len(usages) > 0 {
 		rep.ResourceUsage = &usages[0]
+		if rep.ResourceUsage.CgroupPath != "" {
+			rep.Processes = resources.UnitProcesses(rep.ResourceUsage.CgroupPath)
+		}
 	}
 	rep.DependencyInfo = deps.AnalyzeUnit(canonical, kv, nil)
 	return rep
@@ -347,7 +351,7 @@ func main() {
 		Short: "Run a persistent Prometheus exporter.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg := config.Load(cfgPath)
-			coll := exporter.New(cfg)
+			coll := exporter.New(cfg, expEnableEBPF)
 			prometheus.MustRegister(coll)
 			go coll.RunPeriodic(cmd.Context(), time.Duration(expInterval)*time.Second)
 			http.Handle("/metrics", promhttp.Handler())
@@ -359,6 +363,7 @@ func main() {
 	exporterCmd.Flags().StringVar(&expHost, "host", "0.0.0.0", "Bind address.")
 	exporterCmd.Flags().IntVar(&expPort, "port", 9822, "Port.")
 	exporterCmd.Flags().IntVarP(&expInterval, "interval", "i", 60, "Background refresh interval (seconds).")
+	exporterCmd.Flags().BoolVar(&expEnableEBPF, "enable-ebpf", false, "Continuously trace per-unit eBPF counters (needs root + -tags ebpf build; adds probe overhead).")
 
 	configCmd := &cobra.Command{Use: "config", Short: "Configuration commands."}
 	configShow := &cobra.Command{

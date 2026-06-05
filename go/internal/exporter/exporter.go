@@ -4,6 +4,8 @@ package exporter
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/logs"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/collect/resources"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/config"
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/ebpf"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/features"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/history"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/systemd"
@@ -26,13 +29,18 @@ import (
 const prefix = "sysdiag_analyzer_"
 
 // Collector implements prometheus.Collector, serving from a cached report.
+// With eBPF enabled it also holds a live tracer session read on each scrape.
 type Collector struct {
-	cfg    config.Config
-	mu     sync.RWMutex
-	report *types.SystemReport
+	cfg        config.Config
+	enableEBPF bool
+	mu         sync.RWMutex
+	report     *types.SystemReport
+	sess       *ebpf.Session
 }
 
-func New(cfg config.Config) *Collector { return &Collector{cfg: cfg} }
+func New(cfg config.Config, enableEBPF bool) *Collector {
+	return &Collector{cfg: cfg, enableEBPF: enableEBPF}
+}
 
 // Describe sends no descriptors -> registered as an unchecked collector
 // (variable label sets across scrapes are fine).
@@ -128,6 +136,25 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			ch <- metric(prometheus.CounterValue, "log_patterns_detected", "Detected log pattern occurrences.", float64(p.Count), "pattern_key", p.PatternKey, "level", level)
 		}
 	}
+
+	// eBPF: live, cumulative-since-start counters (use rate() in PromQL).
+	c.mu.RLock()
+	sess := c.sess
+	c.mu.RUnlock()
+	if sess != nil {
+		for _, s := range sess.Snapshot().UnitStats {
+			ch <- metric(prometheus.CounterValue, "unit_proc_execs_total", "Process execs in a unit.", float64(s.Execs), "unit", s.Unit)
+			ch <- metric(prometheus.CounterValue, "unit_proc_exits_total", "Process exits in a unit.", float64(s.Exits), "unit", s.Unit)
+			ch <- metric(prometheus.CounterValue, "unit_proc_abnormal_exits_total", "Process exits by signal or nonzero code.", float64(s.ExitNonzero+s.ExitSignaled), "unit", s.Unit)
+			ch <- metric(prometheus.CounterValue, "unit_oom_kills_total", "OOM kills attributed to a unit.", float64(s.OOMKills), "unit", s.Unit)
+			ch <- metric(prometheus.CounterValue, "unit_sigkill_received_total", "SIGKILLs delivered to a unit's processes.", float64(s.SigKillRcvd), "unit", s.Unit)
+			ch <- metric(prometheus.CounterValue, "unit_offcpu_seconds_total", "Time a unit spent off-CPU in D-state.", float64(s.OffCPUNs)/1e9, "unit", s.Unit)
+			if s.IOOps > 0 {
+				ch <- metric(prometheus.CounterValue, "unit_io_latency_seconds_total", "Summed block-I/O latency (rate(sum)/rate(ops)=avg).", float64(s.IOLatencyUsSum)/1e6, "unit", s.Unit)
+				ch <- metric(prometheus.CounterValue, "unit_io_ops_total", "Completed block I/O ops attributed to a unit.", float64(s.IOOps), "unit", s.Unit)
+			}
+		}
+	}
 }
 
 func emitProblem(ch chan<- prometheus.Metric, units []types.UnitHealthInfo, kind string) {
@@ -137,7 +164,23 @@ func emitProblem(ch chan<- prometheus.Metric, units []types.UnitHealthInfo, kind
 }
 
 // RunPeriodic refreshes the cached report immediately and then on each interval.
+// If eBPF is enabled, it starts a persistent tracer session for its lifetime.
 func (c *Collector) RunPeriodic(ctx context.Context, interval time.Duration) {
+	if c.enableEBPF {
+		if s, err := ebpf.Start(ctx); err == nil {
+			c.mu.Lock()
+			c.sess = s
+			c.mu.Unlock()
+			defer func() {
+				c.mu.Lock()
+				s.Close()
+				c.sess = nil
+				c.mu.Unlock()
+			}()
+		} else {
+			fmt.Fprintln(os.Stderr, "exporter: eBPF metrics disabled: "+err.Error())
+		}
+	}
 	c.collectOnce(ctx)
 	t := time.NewTicker(interval)
 	defer t.Stop()

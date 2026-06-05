@@ -305,10 +305,23 @@ type SystemReport struct {
 	Errors                 []string                      `json:"errors"`
 }
 
+// ProcessUsage is one process's resource usage (per-PID forensic drill-down).
+type ProcessUsage struct {
+	Pid          int      `json:"pid"`
+	Comm         string   `json:"comm"`
+	RSSBytes     *int64   `json:"rss_bytes"`
+	SwapBytes    *int64   `json:"swap_bytes"`
+	DirtyBytes   *int64   `json:"dirty_bytes"`
+	CPUSeconds   *float64 `json:"cpu_seconds"`
+	IOReadBytes  *int64   `json:"io_read_bytes"`
+	IOWriteBytes *int64   `json:"io_write_bytes"`
+}
+
 // SingleUnitReport mirrors datatypes.SingleUnitReport (analyze-unit output).
 type SingleUnitReport struct {
 	UnitInfo       *UnitHealthInfo           `json:"unit_info,omitempty"`
 	ResourceUsage  *UnitResourceUsage        `json:"resource_usage,omitempty"`
+	Processes      []ProcessUsage            `json:"processes,omitempty"`
 	DependencyInfo *FailedUnitDependencyInfo `json:"dependency_info,omitempty"`
 	AnalysisError  string                    `json:"analysis_error,omitempty"`
 }

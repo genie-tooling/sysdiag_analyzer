@@ -84,6 +84,23 @@ func SingleUnit(r *types.SingleUnitReport, w io.Writer) {
 		}
 	}
 
+	if len(r.Processes) > 0 {
+		fmt.Fprintln(w, ui.Section("Processes  (by RSS)"))
+		t := themedTable(ui.Cyan, []string{"PID", "COMMAND", "RSS", "SWAP", "DIRTY", "CPU", "IO R/W"}, 0, 2, 3, 4, 5)
+		for i, p := range r.Processes {
+			if i >= 15 {
+				break
+			}
+			t.Row(fmt.Sprintf("%d", p.Pid), trunc(p.Comm, 20),
+				optBytes(p.RSSBytes), optBytes(p.SwapBytes), optBytes(p.DirtyBytes),
+				optCPU(p.CPUSeconds), optBytes(p.IOReadBytes)+ui.DimS.Render("/")+optBytes(p.IOWriteBytes))
+		}
+		fmt.Fprintln(w, t)
+		if len(r.Processes) > 15 {
+			fmt.Fprintln(w, ui.DimS.Render(fmt.Sprintf("  +%d more processes", len(r.Processes)-15)))
+		}
+	}
+
 	if d := r.DependencyInfo; d != nil && len(d.Dependencies) > 0 {
 		fmt.Fprintln(w, ui.Section("Dependencies"))
 		t := newTable([]string{"", "DEPENDENCY", "TYPE", "STATE"})
@@ -515,6 +532,20 @@ func derefF(p *float64) float64 {
 		return 0
 	}
 	return *p
+}
+
+func optBytes(p *int64) string {
+	if p == nil {
+		return ui.DimS.Render("—")
+	}
+	return humanBytes(*p)
+}
+
+func optCPU(p *float64) string {
+	if p == nil {
+		return ui.DimS.Render("—")
+	}
+	return fmt.Sprintf("%.1fs", *p)
 }
 
 // psiCell colors a PSI stall percentage (>=50 red, >=20 amber).

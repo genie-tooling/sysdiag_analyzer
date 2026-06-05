@@ -75,10 +75,20 @@ make ebpf-gen                      # go generate (clang+bpftool+libbpf) then bui
 ## Commands
 `run` (flags: `--enable-ebpf`, `--analyze-ml`, `--analyze-llm`, `--llm-model`,
 `--analyze-full-graph`, `--since`, `--no-save`, `--output rich|json`), `top`
-(`--sort mem|cpu|io|limit`, `--interval`, `--count`), `exporter` (`--host/--port/-i`),
-`analyze-health`, `analyze-resources`, `analyze-boot`, `analyze-logs` (`--boot`, `--priority`,
-`--since`), `analyze-unit <unit>` (focused single-unit report), `show-history` (`--limit`),
+(`--sort mem|cpu|io|limit`, `--interval`, `--count`), `exporter` (`--host/--port/-i`,
+`--enable-ebpf`), `analyze-health`, `analyze-resources`, `analyze-boot`, `analyze-logs`
+(`--boot`, `--priority`, `--since`), `analyze-unit <unit>` (focused single-unit report
+incl. a **per-PID** RSS/swap/dirty/CPU/IO breakdown), `show-history` (`--limit`),
 `config show`.
+
+The report opens with an **Issues** headline that synthesizes problems across every
+detector (failed/flapping units, eBPF OOM-kills / crash-loops / D-state stalls, leaks,
+anomalies, memory pressure, dependency cycles). With `exporter --enable-ebpf` (needs
+root + the `-tags ebpf` build) the tracer stays attached and the maps are exposed as
+continuous per-unit counters (`unit_proc_execs_total`, `unit_proc_abnormal_exits_total`,
+`unit_oom_kills_total`, `unit_offcpu_seconds_total`, `unit_io_{ops,latency_seconds}_total`)
+plus PSI gauges (`unit_{memory,io,cpu}_pressure_ratio`) and `unit_pgmajfault_total` —
+use `rate()` in PromQL. Note: the always-on `sched_switch`/`block` probes add overhead.
 
 ## LLM synthesis (`--analyze-llm`)
 `[llm].provider` selects the backend:

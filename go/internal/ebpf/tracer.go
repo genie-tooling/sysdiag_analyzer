@@ -24,53 +24,81 @@ var unitSuffixes = []string{
 	".service", ".scope", ".socket", ".target", ".mount", ".swap", ".slice", ".timer", ".path",
 }
 
-// Run loads the eBPF programs, lets the kernel aggregate per-cgroup process
-// stats for dur, then reads the maps and attributes them to systemd units.
-func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
-	res := &types.EBPFAnalysisResult{UnitsWithExecs: map[string]int{}, UnitsWithExits: map[string]int{}}
+// Session is a live eBPF tracer: programs attached, in-kernel maps accumulating.
+// Snapshot reads the (monotonic-since-Start) maps; Close detaches everything.
+// Used by the exporter to read continuous counters each scrape.
+type Session struct {
+	objs  tracerObjects
+	links []link.Link
+}
 
+// Start loads and attaches the eBPF programs, leaving them running.
+func Start(_ context.Context) (*Session, error) {
 	// Kernels >= 5.11 use memcg accounting; ignore failure (needs CAP_SYS_RESOURCE).
 	_ = rlimit.RemoveMemlock()
 
-	var objs tracerObjects
-	if err := loadTracerObjects(&objs, nil); err != nil {
-		res.Error = "loading eBPF objects (needs root and a BTF-capable kernel): " + err.Error()
-		return res
+	s := &Session{}
+	if err := loadTracerObjects(&s.objs, nil); err != nil {
+		return nil, fmt.Errorf("loading eBPF objects (needs root and a BTF-capable kernel): %w", err)
 	}
-	defer objs.Close()
-
-	// exec/exit are essential; oom/signal use kfuncs and may be unavailable on
-	// some kernels — tolerate their attach failure (those columns stay zero).
+	// exec/exit are essential; the rest use kfuncs/hot tracepoints and may be
+	// unavailable on some kernels — tolerate their attach failure.
 	attach := []struct {
 		group, name string
 		prog        *ebpf.Program
 		essential   bool
 	}{
-		{"syscalls", "sys_enter_execve", objs.HandleExecve, true},
-		{"sched", "sched_process_exit", objs.HandleExit, true},
-		{"sched", "sched_switch", objs.HandleSchedSwitch, false},
-		{"block", "block_rq_issue", objs.HandleBlockIssue, false},
-		{"block", "block_rq_complete", objs.HandleBlockComplete, false},
-		{"oom", "mark_victim", objs.HandleOom, false},
-		{"signal", "signal_generate", objs.HandleSignal, false},
+		{"syscalls", "sys_enter_execve", s.objs.HandleExecve, true},
+		{"sched", "sched_process_exit", s.objs.HandleExit, true},
+		{"sched", "sched_switch", s.objs.HandleSchedSwitch, false},
+		{"block", "block_rq_issue", s.objs.HandleBlockIssue, false},
+		{"block", "block_rq_complete", s.objs.HandleBlockComplete, false},
+		{"oom", "mark_victim", s.objs.HandleOom, false},
+		{"signal", "signal_generate", s.objs.HandleSignal, false},
 	}
 	for _, a := range attach {
 		lnk, err := link.Tracepoint(a.group, a.name, a.prog, nil)
 		if err != nil {
 			if a.essential {
-				res.Error = fmt.Sprintf("attaching %s/%s: %v", a.group, a.name, err)
-				return res
+				s.Close()
+				return nil, fmt.Errorf("attaching %s/%s: %w", a.group, a.name, err)
 			}
 			continue // optional probe unavailable on this kernel
 		}
-		defer lnk.Close()
+		s.links = append(s.links, lnk)
 	}
+	return s, nil
+}
 
-	// Aggregate over the window.
+// Close detaches the programs and frees the maps.
+func (s *Session) Close() {
+	for _, l := range s.links {
+		_ = l.Close()
+	}
+	s.objs.Close()
+}
+
+// Run is a one-shot window: attach, aggregate for dur, read, detach.
+func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
+	s, err := Start(ctx)
+	if err != nil {
+		return &types.EBPFAnalysisResult{
+			UnitsWithExecs: map[string]int{}, UnitsWithExits: map[string]int{}, Error: err.Error(),
+		}
+	}
+	defer s.Close()
 	select {
 	case <-ctx.Done():
 	case <-time.After(dur):
 	}
+	return s.Snapshot()
+}
+
+// Snapshot reads the in-kernel maps and attributes them to systemd units. The
+// counts are cumulative since Start (monotonic), so the exporter exposes them
+// as Prometheus counters.
+func (s *Session) Snapshot() *types.EBPFAnalysisResult {
+	res := &types.EBPFAnalysisResult{UnitsWithExecs: map[string]int{}, UnitsWithExits: map[string]int{}}
 
 	inode := buildCgroupInodeMap("/sys/fs/cgroup")
 	resolve := func(cgid uint64) string {
@@ -95,7 +123,7 @@ func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
 
 	var key uint64
 	var val tracerProcStat
-	it := objs.Stats.Iterate()
+	it := s.objs.Stats.Iterate()
 	for it.Next(&key, &val) {
 		u := get(resolve(key))
 		u.Execs += val.Execs
@@ -123,7 +151,7 @@ func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
 	best := map[string]uint64{}
 	var ek tracerExecKey
 	var ev uint64
-	it2 := objs.ExecNames.Iterate()
+	it2 := s.objs.ExecNames.Iterate()
 	for it2.Next(&ek, &ev) {
 		unit := resolve(ek.Cgid)
 		if ev > best[unit] {

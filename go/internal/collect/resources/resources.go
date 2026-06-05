@@ -4,6 +4,8 @@ package resources
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -174,6 +176,72 @@ func Analyze(_ context.Context, units []types.UnitHealthInfo) *types.ResourceAna
 		return deref(u.IOReadBytes) + deref(u.IOWriteBytes)
 	})
 	return res
+}
+
+// UnitProcesses returns per-PID resource usage for the processes directly in a
+// unit's cgroup (forensic drill-down for analyze-unit), sorted by RSS desc.
+func UnitProcesses(rel string) []types.ProcessUsage {
+	c, ok := systemd.ReadCgroupFile(rel, "cgroup.procs")
+	if !ok {
+		return nil
+	}
+	var out []types.ProcessUsage
+	for _, f := range strings.Fields(c) {
+		if pid, err := strconv.Atoi(f); err == nil {
+			out = append(out, readProcess(pid))
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return deref(out[i].RSSBytes) > deref(out[j].RSSBytes) })
+	return out
+}
+
+func readProcess(pid int) types.ProcessUsage {
+	pu := types.ProcessUsage{Pid: pid}
+	p, err := process.NewProcess(int32(pid))
+	if err != nil {
+		return pu
+	}
+	if n, err := p.Name(); err == nil {
+		pu.Comm = n
+	}
+	if mi, err := p.MemoryInfo(); err == nil && mi != nil {
+		r, s := int64(mi.RSS), int64(mi.Swap)
+		pu.RSSBytes, pu.SwapBytes = &r, &s
+	}
+	if t, err := p.Times(); err == nil && t != nil {
+		c := t.User + t.System
+		pu.CPUSeconds = &c
+	}
+	if io, err := p.IOCounters(); err == nil && io != nil {
+		rb, wb := int64(io.ReadBytes), int64(io.WriteBytes)
+		pu.IOReadBytes, pu.IOWriteBytes = &rb, &wb
+	}
+	pu.DirtyBytes = procDirty(pid)
+	return pu
+}
+
+// procDirty sums Private_Dirty + Shared_Dirty from /proc/<pid>/smaps_rollup (kB→bytes).
+func procDirty(pid int) *int64 {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/smaps_rollup", pid))
+	if err != nil {
+		return nil
+	}
+	var total int64
+	found := false
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "Private_Dirty:") || strings.HasPrefix(line, "Shared_Dirty:") {
+			if fields := strings.Fields(line); len(fields) >= 2 {
+				if kb, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+					total += kb * 1024
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		return nil
+	}
+	return &total
 }
 
 // readUnitUsage reads all cgroup v2 metric files for one unit.
