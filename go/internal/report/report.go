@@ -226,8 +226,10 @@ func Text(r *types.SystemReport, w io.Writer) {
 			ui.DimS.Render(fmt.Sprintf("kernel %s · userspace %s", b.Times.Kernel, b.Times.Userspace)))
 	}
 
+	renderIssues(r, w) // auto-flagging headline, synthesized across all detectors
 	renderHealth(r, w)
 	renderTopMemory(r, w)
+	renderPressure(r, w)
 	renderLogs(r, w)
 	renderAnomalies(r, w)
 	renderLeaks(r, w)
@@ -409,6 +411,159 @@ func renderTopMemory(r *types.SystemReport, w io.Writer) {
 			majflt = fmt.Sprintf("%d", *u.MemoryPgMajfault)
 		}
 		t.Row(trunc(u.Name, 44), humanBytes(deref(u.MemoryCurrentByte)), limit, lpct, anon, majflt)
+	}
+	fmt.Fprintln(w, t)
+}
+
+type finding struct {
+	sev  int // 2 = critical, 1 = warning
+	unit string
+	msg  string
+}
+
+// renderIssues is the auto-flagging headline: it synthesizes a prioritized
+// problem list across every detector so the tool tells you what's wrong instead
+// of only showing tables. Empty if nothing notable was found.
+func renderIssues(r *types.SystemReport, w io.Writer) {
+	var f []finding
+	add := func(sev int, unit, msg string) { f = append(f, finding{sev, unit, msg}) }
+
+	if h := r.HealthAnalysis; h != nil {
+		for _, u := range h.FailedUnits {
+			add(2, u.Name, "failed ("+orDash(u.Details["Result"])+")")
+		}
+		for _, u := range h.FlappingUnits {
+			add(2, u.Name, "flapping ("+orDash(u.Details["NRestarts"])+" restarts)")
+		}
+		for _, u := range h.ProblematicSockets {
+			add(1, u.Name, "problematic socket")
+		}
+		for _, u := range h.ProblematicTimers {
+			add(1, u.Name, "problematic timer")
+		}
+	}
+	if e := r.EBPFAnalysis; e != nil {
+		for _, s := range e.UnitStats {
+			if s.OOMKills > 0 {
+				add(2, s.Unit, fmt.Sprintf("OOM-killed %d×", s.OOMKills))
+			}
+			if s.ExitSignaled > 0 {
+				add(2, s.Unit, fmt.Sprintf("%d process crash(es) by signal %d", s.ExitSignaled, s.LastSignal))
+			}
+			if s.OffCPUNs >= 2_000_000_000 {
+				add(1, s.Unit, fmt.Sprintf("stalled %.1fs in D-state (blocked on I/O)", float64(s.OffCPUNs)/1e9))
+			}
+		}
+	}
+	if lk := r.MemoryLeakAnalysis; lk != nil {
+		for _, l := range lk.SuspectedLeaks {
+			add(1, l.UnitName, fmt.Sprintf("suspected leak %s/h", humanBytes(int64(l.SlopeBytesPerHour))))
+		}
+	}
+	if ml := r.MLAnalysis; ml != nil {
+		for i, a := range ml.AnomaliesDetected {
+			if i >= 5 {
+				break
+			}
+			add(1, a.UnitName, "resource anomaly (score "+zStr(a.Score)+")")
+		}
+	}
+	if ra := r.ResourceAnalysis; ra != nil {
+		var ps []types.UnitResourceUsage
+		for _, u := range ra.UnitUsage {
+			if derefF(u.PSIMemPressure) >= 50 {
+				ps = append(ps, u)
+			}
+		}
+		sort.Slice(ps, func(i, j int) bool { return derefF(ps[i].PSIMemPressure) > derefF(ps[j].PSIMemPressure) })
+		for i, u := range ps {
+			if i >= 5 {
+				break
+			}
+			add(1, u.Name, fmt.Sprintf("under memory pressure %.0f%%", *u.PSIMemPressure))
+		}
+	}
+	if fd := r.FullDependencyAnalysis; fd != nil && len(fd.DetectedCycles) > 0 {
+		add(1, "", fmt.Sprintf("%d dependency cycle(s) detected", len(fd.DetectedCycles)))
+	}
+
+	if len(f) == 0 {
+		return
+	}
+	sort.SliceStable(f, func(i, j int) bool { return f[i].sev > f[j].sev })
+	fmt.Fprintln(w, ui.Section(fmt.Sprintf("Issues  (%d)", len(f))))
+	const maxIssues = 20
+	for i, x := range f {
+		if i >= maxIssues {
+			fmt.Fprintln(w, ui.DimS.Render(fmt.Sprintf("  +%d more", len(f)-maxIssues)))
+			break
+		}
+		dot := ui.Dot(ui.WarnS)
+		if x.sev >= 2 {
+			dot = ui.Dot(ui.BadS)
+		}
+		unit := ""
+		if x.unit != "" {
+			unit = lipgloss.NewStyle().Bold(true).Render(trunc(x.unit, 40)) + "  "
+		}
+		fmt.Fprintf(w, "  %s %s%s\n", dot, unit, x.msg)
+	}
+}
+
+func derefF(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// psiCell colors a PSI stall percentage (>=50 red, >=20 amber).
+func psiCell(v float64) string {
+	if v == 0 {
+		return ui.DimS.Render("0%")
+	}
+	s := fmt.Sprintf("%.1f%%", v)
+	switch {
+	case v >= 50:
+		return ui.BadS.Render(s)
+	case v >= 20:
+		return ui.WarnS.Render(s)
+	}
+	return s
+}
+
+func renderPressure(r *types.SystemReport, w io.Writer) {
+	ra := r.ResourceAnalysis
+	if ra == nil {
+		return
+	}
+	type pr struct {
+		unit          string
+		cpu, mem, iop float64
+	}
+	var rows []pr
+	for _, u := range types.CollapseHierarchy(ra.UnitUsage) {
+		c, m, i := derefF(u.PSICPUPressure), derefF(u.PSIMemPressure), derefF(u.PSIIOPressure)
+		if c > 0.5 || m > 0.5 || i > 0.5 { // skip near-idle units
+			rows = append(rows, pr{u.Name, c, m, i})
+		}
+	}
+	if len(rows) == 0 {
+		return
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].mem != rows[j].mem {
+			return rows[i].mem > rows[j].mem
+		}
+		return rows[i].iop > rows[j].iop
+	})
+	fmt.Fprintln(w, ui.Section("Resource pressure  (PSI, % of 10s stalled)"))
+	t := newTable([]string{"UNIT", "CPU", "MEM", "IO"}, 1, 2, 3)
+	for i, p := range rows {
+		if i >= 10 {
+			break
+		}
+		t.Row(trunc(p.unit, 44), psiCell(p.cpu), psiCell(p.mem), psiCell(p.iop))
 	}
 	fmt.Fprintln(w, t)
 }

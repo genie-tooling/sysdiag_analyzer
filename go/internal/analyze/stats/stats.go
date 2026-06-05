@@ -121,6 +121,16 @@ func DetectAnomalies(feats []features.Feature, sensitivity string, only map[stri
 }
 
 // buildSeries: gauges as levels; counters as per-second rates (nil on reset/first).
+// psiScale converts a PSI avg10 percentage to a centi-percent int for the
+// int-based series builder (nil-safe).
+func psiScale(p *float64) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := int64(*p * 100)
+	return &v
+}
+
 func buildSeries(samples []features.Feature) map[string][]*float64 {
 	gauge := func(get func(features.Feature) *int64) []*float64 {
 		out := make([]*float64, len(samples))
@@ -154,6 +164,9 @@ func buildSeries(samples []features.Feature) map[string][]*float64 {
 		"io_read_rate":      rate(func(f features.Feature) *int64 { return f.IORead }),
 		"io_write_rate":     rate(func(f features.Feature) *int64 { return f.IOWrite }),
 		"pgmajfault_rate":   rate(func(f features.Feature) *int64 { return f.MajFault }),
+		"psi_cpu_pressure":  gauge(func(f features.Feature) *int64 { return psiScale(f.PSICPU) }),
+		"psi_mem_pressure":  gauge(func(f features.Feature) *int64 { return psiScale(f.PSIMem) }),
+		"psi_io_pressure":   gauge(func(f features.Feature) *int64 { return psiScale(f.PSIIO) }),
 	}
 }
 

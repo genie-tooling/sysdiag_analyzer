@@ -2,6 +2,45 @@
 // dataclasses (snake_case) so reports and exporter metrics stay compatible.
 package types
 
+import "strings"
+
+// CollapseHierarchy drops ancestor cgroups whose memory is essentially a single
+// descendant's. cgroup v2 accounts hierarchically, so a passthrough slice
+// (user.slice ⊃ user-1000.slice ⊃ user@1000.service) repeats the same usage up
+// the tree; this keeps the deepest dominant node (the real consumer) and any
+// genuine multi-child branch slice, while dropping the redundant ancestors.
+func CollapseHierarchy(us []UnitResourceUsage) []UnitResourceUsage {
+	mem := func(u UnitResourceUsage) int64 {
+		if u.MemoryCurrentByte == nil {
+			return 0
+		}
+		return *u.MemoryCurrentByte
+	}
+	dominated := make([]bool, len(us))
+	for i := range us {
+		pi, mi := us[i].CgroupPath, mem(us[i])
+		if pi == "" || mi == 0 {
+			continue
+		}
+		for j := range us {
+			if i == j || us[j].CgroupPath == "" {
+				continue
+			}
+			if strings.HasPrefix(us[j].CgroupPath, pi+"/") && float64(mem(us[j])) >= 0.9*float64(mi) {
+				dominated[i] = true // a descendant carries ~all of i's memory
+				break
+			}
+		}
+	}
+	out := make([]UnitResourceUsage, 0, len(us))
+	for i := range us {
+		if !dominated[i] {
+			out = append(out, us[i])
+		}
+	}
+	return out
+}
+
 // SystemResourceUsage mirrors datatypes.SystemResourceUsage.
 type SystemResourceUsage struct {
 	CPUPercent       *float64 `json:"cpu_percent"`
@@ -33,7 +72,11 @@ type UnitResourceUsage struct {
 	IOReadBytes       *int64 `json:"io_read_bytes"`
 	IOWriteBytes      *int64 `json:"io_write_bytes"`
 	TasksCurrent      *int64 `json:"tasks_current"`
-	Error             string `json:"error,omitempty"`
+	// PSI "some avg10" stall percentages (0..100), from {cpu,memory,io}.pressure.
+	PSICPUPressure *float64 `json:"psi_cpu_pressure,omitempty"`
+	PSIMemPressure *float64 `json:"psi_mem_pressure,omitempty"`
+	PSIIOPressure  *float64 `json:"psi_io_pressure,omitempty"`
+	Error          string   `json:"error,omitempty"`
 }
 
 // MemoryPercentOfLimit returns current memory as a % of the hard limit, or nil

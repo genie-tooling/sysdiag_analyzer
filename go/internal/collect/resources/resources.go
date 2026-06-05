@@ -161,13 +161,16 @@ func Analyze(_ context.Context, units []types.UnitHealthInfo) *types.ResourceAna
 
 	res.ChildProcessGroups = scanChildGroups(units)
 
-	res.TopMemoryUnits = topBy(res.UnitUsage, func(u types.UnitResourceUsage) int64 {
+	// Rank actual consumers, not the slice nesting chain that repeats the same
+	// usage up the cgroup tree (full UnitUsage is kept intact for JSON).
+	leaves := types.CollapseHierarchy(res.UnitUsage)
+	res.TopMemoryUnits = topBy(leaves, func(u types.UnitResourceUsage) int64 {
 		return deref(u.MemoryCurrentByte)
 	})
-	res.TopCPUUnits = topBy(res.UnitUsage, func(u types.UnitResourceUsage) int64 {
+	res.TopCPUUnits = topBy(leaves, func(u types.UnitResourceUsage) int64 {
 		return deref(u.CPUUsageNsec)
 	})
-	res.TopIOUnits = topBy(res.UnitUsage, func(u types.UnitResourceUsage) int64 {
+	res.TopIOUnits = topBy(leaves, func(u types.UnitResourceUsage) int64 {
 		return deref(u.IOReadBytes) + deref(u.IOWriteBytes)
 	})
 	return res
@@ -209,7 +212,34 @@ func readUnitUsage(name, rel string) types.UnitResourceUsage {
 	if c, ok := systemd.ReadCgroupFile(rel, "cgroup.procs"); ok {
 		uu.TasksCurrent = ParseTasks(c)
 	}
+	if c, ok := systemd.ReadCgroupFile(rel, "cpu.pressure"); ok {
+		uu.PSICPUPressure = ParsePressure(c)
+	}
+	if c, ok := systemd.ReadCgroupFile(rel, "memory.pressure"); ok {
+		uu.PSIMemPressure = ParsePressure(c)
+	}
+	if c, ok := systemd.ReadCgroupFile(rel, "io.pressure"); ok {
+		uu.PSIIOPressure = ParsePressure(c)
+	}
 	return uu
+}
+
+// ParsePressure extracts the "some avg10" stall percentage (0..100) from a
+// cgroup {cpu,memory,io}.pressure file; nil if PSI is unavailable.
+func ParsePressure(content string) *float64 {
+	for _, line := range strings.Split(content, "\n") {
+		if !strings.HasPrefix(line, "some ") {
+			continue
+		}
+		for _, f := range strings.Fields(line) {
+			if v, ok := strings.CutPrefix(f, "avg10="); ok {
+				if p, err := strconv.ParseFloat(v, 64); err == nil {
+					return &p
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // CollectUnitUsage is the fast per-unit read path for the live `top` view: it

@@ -118,6 +118,7 @@ func (c *collector) snapshot(sortKey string, count int) tea.Msg {
 		}
 	}
 
+	usages = types.CollapseHierarchy(usages) // hide the slice nesting chain
 	SortUsages(usages, sortKey)
 	if len(usages) > count {
 		usages = usages[:count]

@@ -77,6 +77,9 @@ func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
 		if u := inode[cgid]; u != "" {
 			return u
 		}
+		if cgid <= 1 { // cgroup2 root inode is 1: kworkers / kernel threads / writeback
+			return "(root/kernel)"
+		}
 		return fmt.Sprintf("cgroup:%d", cgid)
 	}
 
@@ -189,7 +192,9 @@ func buildCgroupInodeMap(base string) map[uint64]string {
 		if !ok {
 			return nil
 		}
-		if unit := deriveUnit(path, base); unit != "" {
+		if path == base {
+			m[st.Ino] = "(root/kernel)" // the cgroup2 root: kernel threads / writeback
+		} else if unit := deriveUnit(path, base); unit != "" {
 			m[st.Ino] = unit
 		}
 		return nil

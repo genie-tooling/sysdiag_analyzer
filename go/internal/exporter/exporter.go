@@ -108,6 +108,15 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			if u.MemoryPgMajfault != nil {
 				ch <- metric(prometheus.CounterValue, "unit_pgmajfault_total", "Unit cumulative major page faults (thrash signal; rate() in PromQL).", float64(*u.MemoryPgMajfault), "unit", u.Name)
 			}
+			if u.PSIMemPressure != nil {
+				ch <- metric(prometheus.GaugeValue, "unit_memory_pressure_ratio", "Unit memory PSI: % of the last 10s with a task stalled on memory.", *u.PSIMemPressure, "unit", u.Name)
+			}
+			if u.PSIIOPressure != nil {
+				ch <- metric(prometheus.GaugeValue, "unit_io_pressure_ratio", "Unit io PSI: % of the last 10s with a task stalled on I/O.", *u.PSIIOPressure, "unit", u.Name)
+			}
+			if u.PSICPUPressure != nil {
+				ch <- metric(prometheus.GaugeValue, "unit_cpu_pressure_ratio", "Unit cpu PSI: % of the last 10s with a task stalled on CPU.", *u.PSICPUPressure, "unit", u.Name)
+			}
 		}
 	}
 	if r.LogAnalysis != nil {

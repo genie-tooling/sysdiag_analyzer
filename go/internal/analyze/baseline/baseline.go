@@ -103,6 +103,19 @@ var metrics = []metricDef{
 	{"io_read_rate", true, func(u types.UnitResourceUsage) *int64 { return u.IOReadBytes }},
 	{"io_write_rate", true, func(u types.UnitResourceUsage) *int64 { return u.IOWriteBytes }},
 	{"pgmajfault_rate", true, func(u types.UnitResourceUsage) *int64 { return u.MemoryPgMajfault }},
+	// PSI stall (gauges, stored as centi-percent so the int-based detector keeps 2 decimals).
+	{"psi_cpu_pressure", false, func(u types.UnitResourceUsage) *int64 { return psiInt(u.PSICPUPressure) }},
+	{"psi_mem_pressure", false, func(u types.UnitResourceUsage) *int64 { return psiInt(u.PSIMemPressure) }},
+	{"psi_io_pressure", false, func(u types.UnitResourceUsage) *int64 { return psiInt(u.PSIIOPressure) }},
+}
+
+// psiInt scales a PSI avg10 percentage to centi-percent int (nil-safe).
+func psiInt(p *float64) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := int64(*p * 100)
+	return &v
 }
 
 func hourOf(epoch float64) string {
