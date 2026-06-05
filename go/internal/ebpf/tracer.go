@@ -125,9 +125,18 @@ func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
 	}
 
 	for unit, s := range agg {
-		res.UnitsWithExecs[unit] = int(s.Execs)
-		res.UnitsWithExits[unit] = int(s.Exits)
-		res.UnitStats = append(res.UnitStats, *s)
+		if s.Execs > 0 {
+			res.UnitsWithExecs[unit] = int(s.Execs)
+		}
+		if s.Exits > 0 {
+			res.UnitsWithExits[unit] = int(s.Exits)
+		}
+		// Drop trivial entries created only by a sub-millisecond D-state wake.
+		meaningful := s.Execs > 0 || s.Exits > 0 || s.ExitNonzero > 0 || s.ExitSignaled > 0 ||
+			s.OOMKills > 0 || s.SigKillRcvd > 0 || s.SigTermRcvd > 0 || s.OffCPUNs >= 1_000_000
+		if meaningful {
+			res.UnitStats = append(res.UnitStats, *s)
+		}
 	}
 	sort.Slice(res.UnitStats, func(i, j int) bool {
 		a, b := res.UnitStats[i], res.UnitStats[j]
