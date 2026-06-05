@@ -246,39 +246,39 @@ func renderEBPF(r *types.SystemReport, w io.Writer) {
 		fmt.Fprintf(w, "  %s %s\n", ui.DimS.Render("unavailable:"), e.Error)
 		return
 	}
-	type row struct {
-		unit     string
-		ex, exit int
-	}
-	rows := map[string]*row{}
-	for u, c := range e.UnitsWithExecs {
-		rows[u] = &row{unit: u, ex: c}
-	}
-	for u, c := range e.UnitsWithExits {
-		if rows[u] == nil {
-			rows[u] = &row{unit: u}
-		}
-		rows[u].exit = c
-	}
-	if len(rows) == 0 {
-		fmt.Fprintln(w, ui.DimS.Render("  no exec/exit events captured"))
+	if len(e.UnitStats) == 0 {
+		fmt.Fprintln(w, ui.DimS.Render("  no process activity captured in the window"))
 		return
 	}
-	ordered := make([]*row, 0, len(rows))
-	for _, rw := range rows {
-		ordered = append(ordered, rw)
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].ex != ordered[j].ex {
-			return ordered[i].ex > ordered[j].ex
+	t := themedTable(ui.Accent, []string{"UNIT", "EXEC", "EXIT", "ABNORMAL", "OOM", "KILLED", "TOP CMD"}, 1, 2, 3, 4, 5)
+	const limit = 15
+	for i, s := range e.UnitStats {
+		if i >= limit {
+			break
 		}
-		return ordered[i].unit < ordered[j].unit
-	})
-	t := newTable([]string{"UNIT", "EXECS", "EXITS"}, 1, 2)
-	for _, rw := range ordered {
-		t.Row(trunc(rw.unit, 44), fmt.Sprintf("%d", rw.ex), fmt.Sprintf("%d", rw.exit))
+		abN := s.ExitNonzero + s.ExitSignaled
+		abnormal := fmt.Sprintf("%d", abN)
+		switch {
+		case s.ExitSignaled > 0:
+			abnormal = ui.BadS.Render(fmt.Sprintf("%d ⚑sig%d", abN, s.LastSignal))
+		case s.ExitNonzero > 0:
+			abnormal = ui.WarnS.Render(fmt.Sprintf("%d ⚑rc%d", abN, s.LastExitCode))
+		}
+		oom := "0"
+		if s.OOMKills > 0 {
+			oom = ui.BadS.Render(fmt.Sprintf("%d", s.OOMKills))
+		}
+		killed := fmt.Sprintf("%d", s.SigKillRcvd+s.SigTermRcvd)
+		if s.SigKillRcvd > 0 {
+			killed = ui.WarnS.Render(killed)
+		}
+		t.Row(trunc(s.Unit, 32), fmt.Sprintf("%d", s.Execs), fmt.Sprintf("%d", s.Exits),
+			abnormal, oom, killed, trunc(s.TopCommand, 16))
 	}
 	fmt.Fprintln(w, t)
+	if len(e.UnitStats) > limit {
+		fmt.Fprintln(w, ui.DimS.Render(fmt.Sprintf("  +%d more units", len(e.UnitStats)-limit)))
+	}
 }
 
 func renderHealth(r *types.SystemReport, w io.Writer) {

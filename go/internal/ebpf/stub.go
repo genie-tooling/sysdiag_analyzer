@@ -14,7 +14,7 @@ func Run(_ context.Context, _ time.Duration) *types.EBPFAnalysisResult {
 	return &types.EBPFAnalysisResult{
 		UnitsWithExecs: map[string]int{},
 		UnitsWithExits: map[string]int{},
-		Error: "eBPF tracing not compiled into this build. Rebuild with clang+bpftool: " +
-			"`go generate ./... && go build -tags ebpf` (runtime needs a BTF-capable kernel).",
+		Error: "eBPF tracing not compiled into this build. Rebuild with `make ebpf` " +
+			"(uses committed bindings; runtime needs root + a BTF-capable kernel).",
 	}
 }

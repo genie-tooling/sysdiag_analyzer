@@ -216,31 +216,27 @@ type LLMAnalysisResult struct {
 
 // --- eBPF ---
 
-type EBPFExecEvent struct {
-	TimestampNs uint64   `json:"timestamp_ns"`
-	Pid         uint32   `json:"pid"`
-	Ppid        uint32   `json:"ppid"`
-	Comm        string   `json:"comm"`
-	CgroupID    uint64   `json:"cgroup_id"`
-	Filename    string   `json:"filename"`
-	Argv        []string `json:"argv"`
-}
-
-type EBPFExitEvent struct {
-	TimestampNs uint64 `json:"timestamp_ns"`
-	Pid         uint32 `json:"pid"`
-	Ppid        uint32 `json:"ppid"`
-	Comm        string `json:"comm"`
-	CgroupID    uint64 `json:"cgroup_id"`
-	ExitCode    int32  `json:"exit_code"`
+// EBPFUnitStat is the per-unit aggregate from in-kernel eBPF counters.
+type EBPFUnitStat struct {
+	Unit           string `json:"unit"`
+	Execs          uint64 `json:"execs"`
+	Exits          uint64 `json:"exits"`
+	ExitNonzero    uint64 `json:"exit_nonzero"`  // exited with a nonzero code
+	ExitSignaled   uint64 `json:"exit_signaled"` // terminated by a signal
+	OOMKills       uint64 `json:"oom_kills"`     // killed by the OOM killer
+	SigKillRcvd    uint64 `json:"sigkill_received"`
+	SigTermRcvd    uint64 `json:"sigterm_received"`
+	LastSignal     uint32 `json:"last_signal,omitempty"`
+	LastExitCode   uint32 `json:"last_exit_code,omitempty"`
+	TopCommand     string `json:"top_command,omitempty"`
+	TopCommandHits uint64 `json:"top_command_hits,omitempty"`
 }
 
 type EBPFAnalysisResult struct {
-	ExecEvents     []EBPFExecEvent `json:"exec_events"`
-	ExitEvents     []EBPFExitEvent `json:"exit_events"`
-	UnitsWithExecs map[string]int  `json:"units_with_execs"`
-	UnitsWithExits map[string]int  `json:"units_with_exits"`
-	Error          string          `json:"error,omitempty"`
+	UnitStats      []EBPFUnitStat `json:"unit_stats"`
+	UnitsWithExecs map[string]int `json:"units_with_execs"` // kept for compatibility
+	UnitsWithExits map[string]int `json:"units_with_exits"`
+	Error          string         `json:"error,omitempty"`
 }
 
 // SystemReport mirrors datatypes.SystemReport.

@@ -8,9 +8,29 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
+
+type tracerExecKey struct {
+	_    structs.HostLayout
+	Cgid uint64
+	Comm [16]int8
+}
+
+type tracerProcStat struct {
+	_            structs.HostLayout
+	Execs        uint64
+	Exits        uint64
+	ExitNonzero  uint64
+	ExitSignaled uint64
+	OomKills     uint64
+	SigkillRcvd  uint64
+	SigtermRcvd  uint64
+	LastSignal   uint32
+	LastExitCode uint32
+}
 
 // loadTracer returns the embedded CollectionSpec for tracer.
 func loadTracer() (*ebpf.CollectionSpec, error) {
@@ -56,20 +76,24 @@ type tracerSpecs struct {
 type tracerProgramSpecs struct {
 	HandleExecve *ebpf.ProgramSpec `ebpf:"handle_execve"`
 	HandleExit   *ebpf.ProgramSpec `ebpf:"handle_exit"`
+	HandleOom    *ebpf.ProgramSpec `ebpf:"handle_oom"`
+	HandleSignal *ebpf.ProgramSpec `ebpf:"handle_signal"`
 }
 
 // tracerMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tracerMapSpecs struct {
-	Events *ebpf.MapSpec `ebpf:"events"`
+	ExecNames *ebpf.MapSpec `ebpf:"exec_names"`
+	Stats     *ebpf.MapSpec `ebpf:"stats"`
 }
 
 // tracerVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tracerVariableSpecs struct {
-	UnusedEvent *ebpf.VariableSpec `ebpf:"_unused_event"`
+	UnusedExecKey  *ebpf.VariableSpec `ebpf:"_unused_exec_key"`
+	UnusedProcStat *ebpf.VariableSpec `ebpf:"_unused_proc_stat"`
 }
 
 // tracerObjects contains all objects after they have been loaded into the kernel.
@@ -92,12 +116,14 @@ func (o *tracerObjects) Close() error {
 //
 // It can be passed to loadTracerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tracerMaps struct {
-	Events *ebpf.Map `ebpf:"events"`
+	ExecNames *ebpf.Map `ebpf:"exec_names"`
+	Stats     *ebpf.Map `ebpf:"stats"`
 }
 
 func (m *tracerMaps) Close() error {
 	return _TracerClose(
-		m.Events,
+		m.ExecNames,
+		m.Stats,
 	)
 }
 
@@ -105,7 +131,8 @@ func (m *tracerMaps) Close() error {
 //
 // It can be passed to loadTracerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tracerVariables struct {
-	UnusedEvent *ebpf.Variable `ebpf:"_unused_event"`
+	UnusedExecKey  *ebpf.Variable `ebpf:"_unused_exec_key"`
+	UnusedProcStat *ebpf.Variable `ebpf:"_unused_proc_stat"`
 }
 
 // tracerPrograms contains all programs after they have been loaded into the kernel.
@@ -114,12 +141,16 @@ type tracerVariables struct {
 type tracerPrograms struct {
 	HandleExecve *ebpf.Program `ebpf:"handle_execve"`
 	HandleExit   *ebpf.Program `ebpf:"handle_exit"`
+	HandleOom    *ebpf.Program `ebpf:"handle_oom"`
+	HandleSignal *ebpf.Program `ebpf:"handle_signal"`
 }
 
 func (p *tracerPrograms) Close() error {
 	return _TracerClose(
 		p.HandleExecve,
 		p.HandleExit,
+		p.HandleOom,
+		p.HandleSignal,
 	)
 }
 

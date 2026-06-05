@@ -12,4 +12,4 @@
 package ebpf
 
 //go:generate sh -c "command -v bpftool >/dev/null && bpftool btf dump file /sys/kernel/btf/vmlinux format c > ../../bpf/vmlinux.h"
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -no-strip -tags ebpf tracer ../../bpf/tracer.c -- -I../../bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -no-strip -tags ebpf -type proc_stat -type exec_key tracer ../../bpf/tracer.c -- -I../../bpf
