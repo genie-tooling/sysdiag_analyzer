@@ -23,6 +23,9 @@ struct proc_stat {
 	__u64 sigkill_rcvd;   // SIGKILL delivered to a member
 	__u64 sigterm_rcvd;   // SIGTERM delivered to a member
 	__u64 offcpu_ns;      // time members spent off-CPU in uninterruptible (D) sleep
+	__u64 io_lat_us_sum;  // summed block-I/O device latency (issuing cgroup)
+	__u64 io_count;       // completed block requests attributed to this cgroup
+	__u64 io_lat_us_max;  // worst single block-I/O latency
 	__u32 last_signal;    // most recent fatal signal number
 	__u32 last_exit_code; // most recent nonzero exit code
 };
@@ -37,6 +40,16 @@ struct exec_key {
 
 // Per-pid off-CPU start record (D-state enter), resolved on the next wake-up.
 struct offcpu_start {
+	__u64 ts;
+	__u64 cgid;
+};
+
+// Block-I/O in-flight key/value: (dev,sector) -> (issue ts, issuing cgroup).
+struct bio_key {
+	__u32 dev;
+	__u64 sector;
+};
+struct bio_val {
 	__u64 ts;
 	__u64 cgid;
 };
@@ -65,6 +78,13 @@ struct {
 	__type(key, __u32);
 	__type(value, struct offcpu_start);
 } offcpu SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 65536);
+	__type(key, struct bio_key);
+	__type(value, struct bio_val);
+} io_start SEC(".maps");
 
 // kfuncs (kernel >= 5.18/6.x) to resolve a pid to its task, so OOM/signal
 // events (which fire in the killer's context) can be attributed to the victim.
@@ -159,6 +179,43 @@ int handle_sched_switch(struct trace_event_raw_sched_switch *ctx)
 			__sync_fetch_and_add(&ps->offcpu_ns, delta);
 		bpf_map_delete_elem(&offcpu, &next_pid);
 	}
+	return 0;
+}
+
+// Block-I/O latency: stamp the issuing cgroup at request issue, measure device
+// service time at completion. Sync I/O (reads, direct/swap) is attributed to the
+// originating cgroup; async writeback runs in a kworker (root cgroup).
+SEC("tracepoint/block/block_rq_issue")
+int handle_block_issue(struct trace_event_raw_block_rq *ctx)
+{
+	struct bio_key k = {};
+	k.dev = BPF_CORE_READ(ctx, dev);
+	k.sector = BPF_CORE_READ(ctx, sector);
+	struct bio_val v = {};
+	v.ts = bpf_ktime_get_ns();
+	v.cgid = bpf_get_current_cgroup_id();
+	bpf_map_update_elem(&io_start, &k, &v, BPF_ANY);
+	return 0;
+}
+
+SEC("tracepoint/block/block_rq_complete")
+int handle_block_complete(struct trace_event_raw_block_rq_completion *ctx)
+{
+	struct bio_key k = {};
+	k.dev = BPF_CORE_READ(ctx, dev);
+	k.sector = BPF_CORE_READ(ctx, sector);
+	struct bio_val *v = bpf_map_lookup_elem(&io_start, &k);
+	if (!v)
+		return 0;
+	__u64 lat_us = (bpf_ktime_get_ns() - v->ts) / 1000;
+	struct proc_stat *ps = stat_for(v->cgid);
+	if (ps) {
+		__sync_fetch_and_add(&ps->io_lat_us_sum, lat_us);
+		__sync_fetch_and_add(&ps->io_count, 1);
+		if (lat_us > ps->io_lat_us_max)
+			ps->io_lat_us_max = lat_us; // racy max is acceptable
+	}
+	bpf_map_delete_elem(&io_start, &k);
 	return 0;
 }
 

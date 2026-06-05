@@ -296,6 +296,42 @@ func renderEBPF(r *types.SystemReport, w io.Writer) {
 	if len(e.UnitStats) > limit {
 		fmt.Fprintln(w, ui.DimS.Render(fmt.Sprintf("  +%d more units", len(e.UnitStats)-limit)))
 	}
+
+	// Block-I/O latency: only units that issued I/O, worst first. Attribution is
+	// accurate for synchronous I/O; async writeback shows under root/kernel.
+	var io []types.EBPFUnitStat
+	for _, s := range e.UnitStats {
+		if s.IOOps > 0 {
+			io = append(io, s)
+		}
+	}
+	if len(io) > 0 {
+		sort.Slice(io, func(i, j int) bool { return io[i].IOLatencyUsMax > io[j].IOLatencyUsMax })
+		it := themedTable(ui.Cyan, []string{"UNIT", "OPS", "AVG", "MAX"}, 1, 2, 3)
+		for i, s := range io {
+			if i >= limit {
+				break
+			}
+			avg := float64(s.IOLatencyUsSum) / float64(s.IOOps) / 1000.0
+			it.Row(trunc(s.Unit, 36), fmt.Sprintf("%d", s.IOOps),
+				fmt.Sprintf("%.1fms", avg), latMaxStr(s.IOLatencyUsMax))
+		}
+		fmt.Fprintln(w, ui.DimS.Render("  block-I/O device latency (sync I/O accurate; writeback → root):"))
+		fmt.Fprintln(w, it)
+	}
+}
+
+// latMaxStr formats a max I/O latency in ms, coloring slow I/O (>100ms red, >20ms amber).
+func latMaxStr(us uint64) string {
+	ms := float64(us) / 1000.0
+	s := fmt.Sprintf("%.1fms", ms)
+	switch {
+	case ms >= 100:
+		return ui.BadS.Render(s)
+	case ms >= 20:
+		return ui.WarnS.Render(s)
+	}
+	return s
 }
 
 func renderHealth(r *types.SystemReport, w io.Writer) {

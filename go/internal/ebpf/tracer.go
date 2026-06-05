@@ -49,6 +49,8 @@ func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
 		{"syscalls", "sys_enter_execve", objs.HandleExecve, true},
 		{"sched", "sched_process_exit", objs.HandleExit, true},
 		{"sched", "sched_switch", objs.HandleSchedSwitch, false},
+		{"block", "block_rq_issue", objs.HandleBlockIssue, false},
+		{"block", "block_rq_complete", objs.HandleBlockComplete, false},
 		{"oom", "mark_victim", objs.HandleOom, false},
 		{"signal", "signal_generate", objs.HandleSignal, false},
 	}
@@ -101,6 +103,11 @@ func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
 		u.SigKillRcvd += val.SigkillRcvd
 		u.SigTermRcvd += val.SigtermRcvd
 		u.OffCPUNs += val.OffcpuNs
+		u.IOOps += val.IoCount
+		u.IOLatencyUsSum += val.IoLatUsSum
+		if val.IoLatUsMax > u.IOLatencyUsMax {
+			u.IOLatencyUsMax = val.IoLatUsMax
+		}
 		if val.LastSignal != 0 {
 			u.LastSignal = val.LastSignal
 		}
@@ -133,7 +140,8 @@ func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
 		}
 		// Drop trivial entries created only by a sub-millisecond D-state wake.
 		meaningful := s.Execs > 0 || s.Exits > 0 || s.ExitNonzero > 0 || s.ExitSignaled > 0 ||
-			s.OOMKills > 0 || s.SigKillRcvd > 0 || s.SigTermRcvd > 0 || s.OffCPUNs >= 1_000_000
+			s.OOMKills > 0 || s.SigKillRcvd > 0 || s.SigTermRcvd > 0 || s.OffCPUNs >= 1_000_000 ||
+			s.IOOps > 0
 		if meaningful {
 			res.UnitStats = append(res.UnitStats, *s)
 		}

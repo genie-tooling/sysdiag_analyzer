@@ -53,6 +53,20 @@ The default binary ships an eBPF stub. The real tracer builds from committed bin
 make ebpf                          # build with -tags ebpf (no clang/bpftool needed)
 sudo ./sysdiag-analyzer run --enable-ebpf --no-save   # must run as root
 ```
+It aggregates **in-kernel** per cgroup and attributes to units. Per unit:
+- exec/exit counts and the **top exec'd binary**
+- **abnormal exits** split into signal-killed (with the signal) vs nonzero exit
+  (with the code) — e.g. `rc127` = a service repeatedly exec'ing a missing binary
+- **OOM kills** (`oom/mark_victim`) attributed to the victim's cgroup
+- **fatal signals received** (SIGKILL/SIGTERM)
+- **off-CPU / D-state stall** time — blocked on I/O or locks
+- **block-I/O device latency** (avg/max) — accurate for synchronous I/O; async
+  writeback is attributed to root/kernel (issuing-context limitation)
+
+Per-cgroup **TCP-retransmit** attribution is intentionally omitted: retransmits
+fire in softirq context and can't be reliably mapped to a systemd unit via eBPF,
+so a per-unit number would be misleading. Use a node TCP exporter for that.
+
 Only regenerate when you change `bpf/tracer.c` (needs the build deps above):
 ```bash
 make ebpf-gen                      # go generate (clang+bpftool+libbpf) then build
