@@ -105,6 +105,9 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			if u.MemoryAnonBytes != nil {
 				ch <- metric(prometheus.GaugeValue, "unit_memory_anon_bytes", "Unit anon memory (leak signal; deriv() in PromQL).", float64(*u.MemoryAnonBytes), "unit", u.Name)
 			}
+			if u.MemoryPgMajfault != nil {
+				ch <- metric(prometheus.CounterValue, "unit_pgmajfault_total", "Unit cumulative major page faults (thrash signal; rate() in PromQL).", float64(*u.MemoryPgMajfault), "unit", u.Name)
+			}
 		}
 	}
 	if r.LogAnalysis != nil {

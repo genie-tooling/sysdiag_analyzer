@@ -153,6 +153,7 @@ func buildSeries(samples []features.Feature) map[string][]*float64 {
 		"cpu_usage_rate":    rate(func(f features.Feature) *int64 { return f.CPUNsec }),
 		"io_read_rate":      rate(func(f features.Feature) *int64 { return f.IORead }),
 		"io_write_rate":     rate(func(f features.Feature) *int64 { return f.IOWrite }),
+		"pgmajfault_rate":   rate(func(f features.Feature) *int64 { return f.MajFault }),
 	}
 }
 

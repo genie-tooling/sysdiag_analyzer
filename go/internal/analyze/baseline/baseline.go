@@ -102,6 +102,7 @@ var metrics = []metricDef{
 	{"cpu_usage_rate", true, func(u types.UnitResourceUsage) *int64 { return u.CPUUsageNsec }},
 	{"io_read_rate", true, func(u types.UnitResourceUsage) *int64 { return u.IOReadBytes }},
 	{"io_write_rate", true, func(u types.UnitResourceUsage) *int64 { return u.IOWriteBytes }},
+	{"pgmajfault_rate", true, func(u types.UnitResourceUsage) *int64 { return u.MemoryPgMajfault }},
 }
 
 func hourOf(epoch float64) string {

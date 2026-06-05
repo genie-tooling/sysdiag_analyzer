@@ -18,6 +18,7 @@ type Feature struct {
 	IORead     *int64
 	IOWrite    *int64
 	Tasks      *int64
+	MajFault   *int64
 }
 
 func parseTS(s string) (float64, bool) {
@@ -47,6 +48,7 @@ func Extract(reports []*types.SystemReport) []Feature {
 				CPUNsec: u.CPUUsageNsec, MemAnon: u.MemoryAnonBytes,
 				MemCurrent: u.MemoryCurrentByte, IORead: u.IOReadBytes,
 				IOWrite: u.IOWriteBytes, Tasks: u.TasksCurrent,
+				MajFault: u.MemoryPgMajfault,
 			})
 		}
 	}

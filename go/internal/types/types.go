@@ -29,6 +29,7 @@ type UnitResourceUsage struct {
 	MemoryHighBytes   *int64 `json:"memory_high_bytes"` // nil = "max"/unset
 	MemoryAnonBytes   *int64 `json:"memory_anon_bytes"`
 	MemoryFileBytes   *int64 `json:"memory_file_bytes"`
+	MemoryPgMajfault  *int64 `json:"memory_pgmajfault"` // cumulative major page faults
 	IOReadBytes       *int64 `json:"io_read_bytes"`
 	IOWriteBytes      *int64 `json:"io_write_bytes"`
 	TasksCurrent      *int64 `json:"tasks_current"`

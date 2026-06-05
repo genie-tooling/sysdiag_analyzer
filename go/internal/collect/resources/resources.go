@@ -199,6 +199,9 @@ func readUnitUsage(name, rel string) types.UnitResourceUsage {
 		if v, ok := stat["file"]; ok {
 			uu.MemoryFileBytes = pi(v)
 		}
+		if v, ok := stat["pgmajfault"]; ok {
+			uu.MemoryPgMajfault = pi(v)
+		}
 	}
 	if c, ok := systemd.ReadCgroupFile(rel, "io.stat"); ok {
 		uu.IOReadBytes, uu.IOWriteBytes = ParseIOStat(c)

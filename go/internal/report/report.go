@@ -355,7 +355,7 @@ func renderTopMemory(r *types.SystemReport, w io.Writer) {
 		return
 	}
 	fmt.Fprintln(w, ui.Section("Top memory consumers"))
-	t := newTable([]string{"UNIT", "MEM", "LIMIT", "%LIM", "ANON"}, 1, 2, 3, 4)
+	t := newTable([]string{"UNIT", "MEM", "LIMIT", "%LIM", "ANON", "MAJFLT"}, 1, 2, 3, 4, 5)
 	for _, u := range ra.TopMemoryUnits {
 		limit, lpct := ui.DimS.Render("none"), ui.DimS.Render("—")
 		if u.MemoryMaxBytes != nil {
@@ -368,7 +368,11 @@ func renderTopMemory(r *types.SystemReport, w io.Writer) {
 		if u.MemoryAnonBytes != nil {
 			anon = humanBytes(*u.MemoryAnonBytes)
 		}
-		t.Row(trunc(u.Name, 44), humanBytes(deref(u.MemoryCurrentByte)), limit, lpct, anon)
+		majflt := ui.DimS.Render("—")
+		if u.MemoryPgMajfault != nil {
+			majflt = fmt.Sprintf("%d", *u.MemoryPgMajfault)
+		}
+		t.Row(trunc(u.Name, 44), humanBytes(deref(u.MemoryCurrentByte)), limit, lpct, anon, majflt)
 	}
 	fmt.Fprintln(w, t)
 }
