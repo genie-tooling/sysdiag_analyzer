@@ -226,6 +226,7 @@ type EBPFUnitStat struct {
 	OOMKills       uint64 `json:"oom_kills"`     // killed by the OOM killer
 	SigKillRcvd    uint64 `json:"sigkill_received"`
 	SigTermRcvd    uint64 `json:"sigterm_received"`
+	OffCPUNs       uint64 `json:"offcpu_ns"` // D-state (uninterruptible) stall time
 	LastSignal     uint32 `json:"last_signal,omitempty"`
 	LastExitCode   uint32 `json:"last_exit_code,omitempty"`
 	TopCommand     string `json:"top_command,omitempty"`

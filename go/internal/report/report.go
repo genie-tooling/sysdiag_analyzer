@@ -236,6 +236,23 @@ func Text(r *types.SystemReport, w io.Writer) {
 	renderLLM(r, w)
 }
 
+// stallStr formats off-CPU D-state time, coloring sustained stalls (>1s red, >100ms amber).
+func stallStr(ns uint64) string {
+	if ns == 0 {
+		return ui.DimS.Render("—")
+	}
+	ms := float64(ns) / 1e6
+	s := fmt.Sprintf("%.0fms", ms)
+	if ms >= 1000 {
+		s = fmt.Sprintf("%.1fs", ms/1000)
+		return ui.BadS.Render(s)
+	}
+	if ms >= 100 {
+		return ui.WarnS.Render(s)
+	}
+	return s
+}
+
 func renderEBPF(r *types.SystemReport, w io.Writer) {
 	e := r.EBPFAnalysis
 	if e == nil {
@@ -250,7 +267,7 @@ func renderEBPF(r *types.SystemReport, w io.Writer) {
 		fmt.Fprintln(w, ui.DimS.Render("  no process activity captured in the window"))
 		return
 	}
-	t := themedTable(ui.Accent, []string{"UNIT", "EXEC", "EXIT", "ABNORMAL", "OOM", "KILLED", "TOP CMD"}, 1, 2, 3, 4, 5)
+	t := themedTable(ui.Accent, []string{"UNIT", "EXEC", "EXIT", "ABNORMAL", "OOM", "KILLED", "STALL", "TOP CMD"}, 1, 2, 3, 4, 5, 6)
 	const limit = 15
 	for i, s := range e.UnitStats {
 		if i >= limit {
@@ -272,8 +289,8 @@ func renderEBPF(r *types.SystemReport, w io.Writer) {
 		if s.SigKillRcvd > 0 {
 			killed = ui.WarnS.Render(killed)
 		}
-		t.Row(trunc(s.Unit, 32), fmt.Sprintf("%d", s.Execs), fmt.Sprintf("%d", s.Exits),
-			abnormal, oom, killed, trunc(s.TopCommand, 16))
+		t.Row(trunc(s.Unit, 30), fmt.Sprintf("%d", s.Execs), fmt.Sprintf("%d", s.Exits),
+			abnormal, oom, killed, stallStr(s.OffCPUNs), trunc(s.TopCommand, 16))
 	}
 	fmt.Fprintln(w, t)
 	if len(e.UnitStats) > limit {

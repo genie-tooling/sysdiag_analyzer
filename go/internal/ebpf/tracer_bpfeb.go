@@ -19,6 +19,12 @@ type tracerExecKey struct {
 	Comm [16]int8
 }
 
+type tracerOffcpuStart struct {
+	_    structs.HostLayout
+	Ts   uint64
+	Cgid uint64
+}
+
 type tracerProcStat struct {
 	_            structs.HostLayout
 	Execs        uint64
@@ -28,6 +34,7 @@ type tracerProcStat struct {
 	OomKills     uint64
 	SigkillRcvd  uint64
 	SigtermRcvd  uint64
+	OffcpuNs     uint64
 	LastSignal   uint32
 	LastExitCode uint32
 }
@@ -74,10 +81,11 @@ type tracerSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tracerProgramSpecs struct {
-	HandleExecve *ebpf.ProgramSpec `ebpf:"handle_execve"`
-	HandleExit   *ebpf.ProgramSpec `ebpf:"handle_exit"`
-	HandleOom    *ebpf.ProgramSpec `ebpf:"handle_oom"`
-	HandleSignal *ebpf.ProgramSpec `ebpf:"handle_signal"`
+	HandleExecve      *ebpf.ProgramSpec `ebpf:"handle_execve"`
+	HandleExit        *ebpf.ProgramSpec `ebpf:"handle_exit"`
+	HandleOom         *ebpf.ProgramSpec `ebpf:"handle_oom"`
+	HandleSchedSwitch *ebpf.ProgramSpec `ebpf:"handle_sched_switch"`
+	HandleSignal      *ebpf.ProgramSpec `ebpf:"handle_signal"`
 }
 
 // tracerMapSpecs contains maps before they are loaded into the kernel.
@@ -85,6 +93,7 @@ type tracerProgramSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type tracerMapSpecs struct {
 	ExecNames *ebpf.MapSpec `ebpf:"exec_names"`
+	Offcpu    *ebpf.MapSpec `ebpf:"offcpu"`
 	Stats     *ebpf.MapSpec `ebpf:"stats"`
 }
 
@@ -117,12 +126,14 @@ func (o *tracerObjects) Close() error {
 // It can be passed to loadTracerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tracerMaps struct {
 	ExecNames *ebpf.Map `ebpf:"exec_names"`
+	Offcpu    *ebpf.Map `ebpf:"offcpu"`
 	Stats     *ebpf.Map `ebpf:"stats"`
 }
 
 func (m *tracerMaps) Close() error {
 	return _TracerClose(
 		m.ExecNames,
+		m.Offcpu,
 		m.Stats,
 	)
 }
@@ -139,10 +150,11 @@ type tracerVariables struct {
 //
 // It can be passed to loadTracerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tracerPrograms struct {
-	HandleExecve *ebpf.Program `ebpf:"handle_execve"`
-	HandleExit   *ebpf.Program `ebpf:"handle_exit"`
-	HandleOom    *ebpf.Program `ebpf:"handle_oom"`
-	HandleSignal *ebpf.Program `ebpf:"handle_signal"`
+	HandleExecve      *ebpf.Program `ebpf:"handle_execve"`
+	HandleExit        *ebpf.Program `ebpf:"handle_exit"`
+	HandleOom         *ebpf.Program `ebpf:"handle_oom"`
+	HandleSchedSwitch *ebpf.Program `ebpf:"handle_sched_switch"`
+	HandleSignal      *ebpf.Program `ebpf:"handle_signal"`
 }
 
 func (p *tracerPrograms) Close() error {
@@ -150,6 +162,7 @@ func (p *tracerPrograms) Close() error {
 		p.HandleExecve,
 		p.HandleExit,
 		p.HandleOom,
+		p.HandleSchedSwitch,
 		p.HandleSignal,
 	)
 }

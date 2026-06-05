@@ -48,6 +48,7 @@ func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
 	}{
 		{"syscalls", "sys_enter_execve", objs.HandleExecve, true},
 		{"sched", "sched_process_exit", objs.HandleExit, true},
+		{"sched", "sched_switch", objs.HandleSchedSwitch, false},
 		{"oom", "mark_victim", objs.HandleOom, false},
 		{"signal", "signal_generate", objs.HandleSignal, false},
 	}
@@ -99,6 +100,7 @@ func Run(ctx context.Context, dur time.Duration) *types.EBPFAnalysisResult {
 		u.OOMKills += val.OomKills
 		u.SigKillRcvd += val.SigkillRcvd
 		u.SigTermRcvd += val.SigtermRcvd
+		u.OffCPUNs += val.OffcpuNs
 		if val.LastSignal != 0 {
 			u.LastSignal = val.LastSignal
 		}

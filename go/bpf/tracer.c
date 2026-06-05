@@ -22,14 +22,23 @@ struct proc_stat {
 	__u64 oom_kills;      // killed by the OOM killer
 	__u64 sigkill_rcvd;   // SIGKILL delivered to a member
 	__u64 sigterm_rcvd;   // SIGTERM delivered to a member
+	__u64 offcpu_ns;      // time members spent off-CPU in uninterruptible (D) sleep
 	__u32 last_signal;    // most recent fatal signal number
 	__u32 last_exit_code; // most recent nonzero exit code
 };
+
+#define TASK_UNINTERRUPTIBLE 0x0002
 
 // Key for the top-binary map: (cgroup, comm) -> exec count.
 struct exec_key {
 	__u64 cgid;
 	char  comm[TASK_COMM_LEN];
+};
+
+// Per-pid off-CPU start record (D-state enter), resolved on the next wake-up.
+struct offcpu_start {
+	__u64 ts;
+	__u64 cgid;
 };
 
 // Force BTF emission so bpf2go can generate Go structs (-type).
@@ -49,6 +58,13 @@ struct {
 	__type(key, struct exec_key);
 	__type(value, __u64);
 } exec_names SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 65536);
+	__type(key, __u32);
+	__type(value, struct offcpu_start);
+} offcpu SEC(".maps");
 
 // kfuncs (kernel >= 5.18/6.x) to resolve a pid to its task, so OOM/signal
 // events (which fire in the killer's context) can be attributed to the victim.
@@ -114,6 +130,34 @@ int handle_exit(void *ctx)
 	} else if (ec != 0) {
 		__sync_fetch_and_add(&s->exit_nonzero, 1);
 		s->last_exit_code = ec;
+	}
+	return 0;
+}
+
+SEC("tracepoint/sched/sched_switch")
+int handle_sched_switch(struct trace_event_raw_sched_switch *ctx)
+{
+	__u64 now = bpf_ktime_get_ns();
+	__u32 prev_pid = BPF_CORE_READ(ctx, prev_pid);
+	long prev_state = BPF_CORE_READ(ctx, prev_state);
+	__u32 next_pid = BPF_CORE_READ(ctx, next_pid);
+
+	// Task going off-CPU in uninterruptible (D) sleep: stamp its start.
+	// At this tracepoint `current` is still prev, so its cgroup id is correct.
+	if ((prev_state & TASK_UNINTERRUPTIBLE) && prev_pid != 0) {
+		struct offcpu_start s = {};
+		s.ts = now;
+		s.cgid = bpf_get_current_cgroup_id();
+		bpf_map_update_elem(&offcpu, &prev_pid, &s, BPF_ANY);
+	}
+	// Task returning to CPU: attribute the D-state stall to its cgroup.
+	struct offcpu_start *st = bpf_map_lookup_elem(&offcpu, &next_pid);
+	if (st) {
+		__u64 delta = now - st->ts;
+		struct proc_stat *ps = stat_for(st->cgid);
+		if (ps)
+			__sync_fetch_and_add(&ps->offcpu_ns, delta);
+		bpf_map_delete_elem(&offcpu, &next_pid);
 	}
 	return 0;
 }
