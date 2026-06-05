@@ -42,6 +42,22 @@ go build -tags ebpf -o sysdiag-analyzer ./cmd/sysdiag-analyzer
 `--interval`, `--count`), `exporter` (`--host/--port/-i`), `analyze-{health,resources,boot,logs}`,
 `show-history`, `config show`.
 
+## Anomaly detection (`--analyze-ml`)
+Selected by `[models].method`:
+- **`statistical`** (default) — stateless. For each unit/metric it computes a robust
+  modified z-score (median + MAD) over the recent history window; needs no prior state
+  but only sees what is on disk.
+- **`baseline`** — online & adaptive. Learns each unit/metric baseline as an EWMA
+  control chart (mean + variance, West's algorithm) and flags samples beyond
+  `mean + k·σ`. Counters (cpu/io) are scored as per-second rates with reset detection;
+  gauges (mem/tasks) as levels. State persists in `<models.directory>/baseline.json`,
+  warms up silently for `min_updates` (default 8) samples, tolerates steady drift, and
+  prunes units unseen for 7 days. Optional `seasonal = true` keeps a separate baseline
+  per hour-of-day. Tunables: `ewma_alpha` (0.3), `min_updates` (8), `seasonal` (false),
+  `sensitivity` (low/medium/high → k = 4.0/3.0/2.5).
+- **`lstm`** — not in the default build; falls back to `statistical` with a recorded
+  warning (see *Not ported*).
+
 ## Layout
 ```
 cmd/sysdiag-analyzer   CLI (cobra)
@@ -49,7 +65,7 @@ internal/types         report data model (JSON tags match the Python schema)
 internal/config        TOML config ([llm]/[history]/[models])
 internal/systemd       D-Bus unit list + batched systemctl props + cgroup reads
 internal/collect/*     boot, health, resources (+child groups, fd), logs, deps
-internal/analyze/*     stats (modified-z anomalies), leak (anon slope), llm (ollama/openai)
+internal/analyze/*     stats (modified-z), baseline (online EWMA control chart), leak (anon slope), llm
 internal/features      report -> per-unit feature rows
 internal/history       gzipped-JSON persistence + retention
 internal/exporter      prometheus/client_golang collector

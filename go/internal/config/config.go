@@ -25,11 +25,16 @@ type History struct {
 
 type Models struct {
 	Directory     string `toml:"directory" json:"directory"`
-	Method        string `toml:"method" json:"method"`
+	Method        string `toml:"method" json:"method"` // statistical | baseline | lstm
 	Sensitivity   string `toml:"sensitivity" json:"sensitivity"`
 	HistoryWindow int    `toml:"history_window" json:"history_window"`
-	LSTMTimesteps int    `toml:"lstm_timesteps" json:"lstm_timesteps"`
-	MinSamples    int    `toml:"min_samples_train" json:"min_samples_train"`
+	// Adaptive baseline (method = "baseline").
+	EWMAAlpha  float64 `toml:"ewma_alpha" json:"ewma_alpha"`
+	Seasonal   bool    `toml:"seasonal" json:"seasonal"`
+	MinUpdates int     `toml:"min_updates" json:"min_updates"`
+	// LSTM-specific (method = "lstm").
+	LSTMTimesteps int `toml:"lstm_timesteps" json:"lstm_timesteps"`
+	MinSamples    int `toml:"min_samples_train" json:"min_samples_train"`
 }
 
 type Config struct {
@@ -51,6 +56,8 @@ func Default() Config {
 			Method:        "statistical",
 			Sensitivity:   "medium",
 			HistoryWindow: 30,
+			EWMAAlpha:     0.3,
+			MinUpdates:    8,
 			LSTMTimesteps: 5,
 			MinSamples:    10,
 		},

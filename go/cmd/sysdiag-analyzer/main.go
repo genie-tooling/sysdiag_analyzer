@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 
+	"github.com/genie-tooling/sysdiag-analyzer-go/internal/analyze/baseline"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/analyze/leak"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/analyze/llm"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/analyze/stats"
@@ -131,10 +133,37 @@ func main() {
 				reports := append(history.Load(cfg.History.Directory, cfg.Models.HistoryWindow), r)
 				feats := features.Extract(reports)
 				active := activeServiceSet(units)
-				r.MLAnalysis = &types.MLAnalysisResult{
-					AnomaliesDetected:        stats.DetectAnomalies(feats, cfg.Models.Sensitivity, active),
-					UnitsAnalyzedCount:       len(active),
-					SkippedZeroVarianceUnits: []string{},
+				var usage []types.UnitResourceUsage
+				if r.ResourceAnalysis != nil {
+					usage = r.ResourceAnalysis.UnitUsage
+				}
+				switch cfg.Models.Method {
+				case "baseline":
+					// Online, adaptive EWMA/seasonal baseline (stateful across runs).
+					stPath := filepath.Join(cfg.Models.Directory, "baseline.json")
+					st := baseline.Load(stPath)
+					now := float64(time.Now().Unix())
+					anomalies := baseline.Detect(st, usage, now, cfg.Models.Sensitivity,
+						cfg.Models.Seasonal, cfg.Models.EWMAAlpha, cfg.Models.MinUpdates, nil)
+					st.Prune(now, 7*24*3600)
+					if err := st.Save(stPath); err != nil {
+						r.Errors = append(r.Errors, "saving baseline state: "+err.Error())
+					}
+					r.MLAnalysis = &types.MLAnalysisResult{
+						AnomaliesDetected:        anomalies,
+						UnitsAnalyzedCount:       len(usage),
+						SkippedZeroVarianceUnits: []string{},
+					}
+				default: // "statistical" (window-based, stateless)
+					if cfg.Models.Method == "lstm" {
+						r.Errors = append(r.Errors,
+							"models.method=lstm is not available in this build (build with -tags lstm); falling back to statistical")
+					}
+					r.MLAnalysis = &types.MLAnalysisResult{
+						AnomaliesDetected:        stats.DetectAnomalies(feats, cfg.Models.Sensitivity, active),
+						UnitsAnalyzedCount:       len(active),
+						SkippedZeroVarianceUnits: []string{},
+					}
 				}
 				lk, n := leak.Detect(feats, nil)
 				r.MemoryLeakAnalysis = &types.MemoryLeakAnalysisResult{SuspectedLeaks: lk, UnitsAnalyzedCount: n}
