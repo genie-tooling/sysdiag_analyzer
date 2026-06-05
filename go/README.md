@@ -37,10 +37,20 @@ go build -tags ebpf -o sysdiag-analyzer ./cmd/sysdiag-analyzer
 ```
 
 ## Commands
-`run` (flags: `--enable-ebpf`, `--analyze-ml`, `--analyze-llm`, `--analyze-full-graph`,
-`--since`, `--no-save`, `--output rich|json`), `top` (`--sort mem|cpu|io|limit`,
-`--interval`, `--count`), `exporter` (`--host/--port/-i`), `analyze-{health,resources,boot,logs}`,
-`show-history`, `config show`.
+`run` (flags: `--enable-ebpf`, `--analyze-ml`, `--analyze-llm`, `--llm-model`,
+`--analyze-full-graph`, `--since`, `--no-save`, `--output rich|json`), `top`
+(`--sort mem|cpu|io|limit`, `--interval`, `--count`), `exporter` (`--host/--port/-i`),
+`analyze-health`, `analyze-resources`, `analyze-boot`, `analyze-logs` (`--boot`, `--priority`,
+`--since`), `analyze-unit <unit>` (focused single-unit report), `show-history` (`--limit`),
+`config show`.
+
+## LLM synthesis (`--analyze-llm`)
+`[llm].provider` selects the backend:
+- **`ollama`** / **`openai`** (or `openai-compatible`) — HTTP to a local or remote endpoint.
+- **`claude-code`** — runs the local Claude Code CLI headlessly (`claude -p --output-format
+  json`), using your existing Claude Code auth, so **no API key** is needed. `[llm].model`
+  is optional (defaults to the CLI's model); `[llm].host` may point at a non-default `claude`
+  binary path. Override the model per-run with `--llm-model`.
 
 ## Anomaly detection (`--analyze-ml`)
 Selected by `[models].method`:

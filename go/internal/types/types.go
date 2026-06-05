@@ -260,3 +260,11 @@ type SystemReport struct {
 	EBPFAnalysis           *EBPFAnalysisResult           `json:"ebpf_analysis,omitempty"`
 	Errors                 []string                      `json:"errors"`
 }
+
+// SingleUnitReport mirrors datatypes.SingleUnitReport (analyze-unit output).
+type SingleUnitReport struct {
+	UnitInfo       *UnitHealthInfo           `json:"unit_info,omitempty"`
+	ResourceUsage  *UnitResourceUsage        `json:"resource_usage,omitempty"`
+	DependencyInfo *FailedUnitDependencyInfo `json:"dependency_info,omitempty"`
+	AnalysisError  string                    `json:"analysis_error,omitempty"`
+}

@@ -20,6 +20,92 @@ func JSON(r *types.SystemReport) ([]byte, error) {
 	return json.MarshalIndent(r, "", "  ")
 }
 
+// JSONSingle returns a single-unit report as indented JSON.
+func JSONSingle(r *types.SingleUnitReport) ([]byte, error) {
+	return json.MarshalIndent(r, "", "  ")
+}
+
+// SingleUnit writes a styled focused report for one unit (analyze-unit).
+func SingleUnit(r *types.SingleUnitReport, w io.Writer) {
+	if r.AnalysisError != "" {
+		fmt.Fprintf(w, "%s %s\n", ui.BadS.Render("error:"), r.AnalysisError)
+		return
+	}
+	u := r.UnitInfo
+	name := "unit"
+	if u != nil {
+		name = u.Name
+	}
+	title := lipgloss.NewStyle().Bold(true).Foreground(ui.Accent).Render(name)
+	fmt.Fprintln(w, lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).BorderForeground(ui.Accent).Padding(0, 1).Render(title))
+
+	if u != nil {
+		st := ui.GoodS
+		switch {
+		case u.ActiveState == "failed":
+			st = ui.BadS
+		case u.IsFlapping || u.IsProblematicSocket || u.IsProblematicTimer:
+			st = ui.WarnS
+		}
+		fmt.Fprintf(w, "%s %s\n", ui.CyanS.Render("state"),
+			st.Render(fmt.Sprintf("%s / %s / %s", u.LoadState, u.ActiveState, u.SubState)))
+		if u.Description != "" {
+			fmt.Fprintf(w, "%s %s\n", ui.CyanS.Render("desc "), u.Description)
+		}
+		if u.ErrorMessage != "" {
+			fmt.Fprintf(w, "  %s %s\n", ui.WarnS.Render("⚠"), u.ErrorMessage)
+		}
+	}
+
+	if ru := r.ResourceUsage; ru != nil {
+		fmt.Fprintln(w, ui.Section("Resources"))
+		kv := [][2]string{}
+		if ru.MemoryCurrentByte != nil {
+			kv = append(kv, [2]string{"Memory", humanBytes(*ru.MemoryCurrentByte)})
+		}
+		if ru.MemoryAnonBytes != nil {
+			kv = append(kv, [2]string{"Anon", humanBytes(*ru.MemoryAnonBytes)})
+		}
+		if ru.MemoryMaxBytes != nil {
+			kv = append(kv, [2]string{"Limit", humanBytes(*ru.MemoryMaxBytes)})
+		}
+		if ru.TasksCurrent != nil {
+			kv = append(kv, [2]string{"Tasks", fmt.Sprintf("%d", *ru.TasksCurrent)})
+		}
+		if ru.CPUUsageNsec != nil {
+			kv = append(kv, [2]string{"CPU time", fmt.Sprintf("%.1fs", float64(*ru.CPUUsageNsec)/1e9)})
+		}
+		for _, p := range kv {
+			fmt.Fprintf(w, "  %s %s\n", ui.CyanS.Render(fmt.Sprintf("%-9s", p[0])), p[1])
+		}
+		if ru.Error != "" {
+			fmt.Fprintf(w, "  %s\n", ui.WarnS.Render(ru.Error))
+		}
+	}
+
+	if d := r.DependencyInfo; d != nil && len(d.Dependencies) > 0 {
+		fmt.Fprintln(w, ui.Section("Dependencies"))
+		t := newTable([]string{"", "DEPENDENCY", "TYPE", "STATE"})
+		for _, dep := range d.Dependencies {
+			mark := ui.GoodS.Render("•")
+			if dep.IsProblematic {
+				mark = ui.BadS.Render("✗")
+			}
+			t.Row(mark, trunc(dep.Name, 40), dep.Type,
+				fmt.Sprintf("%s/%s", dep.CurrentLoadState, dep.CurrentActiveState))
+		}
+		fmt.Fprintln(w, t)
+	}
+
+	if u != nil && len(u.RecentLogs) > 0 {
+		fmt.Fprintln(w, ui.Section("Recent logs"))
+		for _, line := range u.RecentLogs {
+			fmt.Fprintln(w, ui.DimS.Render("  "+line))
+		}
+	}
+}
+
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -117,7 +203,53 @@ func Text(r *types.SystemReport, w io.Writer) {
 	renderAnomalies(r, w)
 	renderLeaks(r, w)
 	renderDeps(r, w)
+	renderEBPF(r, w)
 	renderLLM(r, w)
+}
+
+func renderEBPF(r *types.SystemReport, w io.Writer) {
+	e := r.EBPFAnalysis
+	if e == nil {
+		return
+	}
+	fmt.Fprintln(w, ui.Section("eBPF process tracing"))
+	if e.Error != "" {
+		fmt.Fprintf(w, "  %s %s\n", ui.DimS.Render("unavailable:"), e.Error)
+		return
+	}
+	type row struct {
+		unit     string
+		ex, exit int
+	}
+	rows := map[string]*row{}
+	for u, c := range e.UnitsWithExecs {
+		rows[u] = &row{unit: u, ex: c}
+	}
+	for u, c := range e.UnitsWithExits {
+		if rows[u] == nil {
+			rows[u] = &row{unit: u}
+		}
+		rows[u].exit = c
+	}
+	if len(rows) == 0 {
+		fmt.Fprintln(w, ui.DimS.Render("  no exec/exit events captured"))
+		return
+	}
+	ordered := make([]*row, 0, len(rows))
+	for _, rw := range rows {
+		ordered = append(ordered, rw)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].ex != ordered[j].ex {
+			return ordered[i].ex > ordered[j].ex
+		}
+		return ordered[i].unit < ordered[j].unit
+	})
+	t := newTable([]string{"UNIT", "EXECS", "EXITS"}, 1, 2)
+	for _, rw := range ordered {
+		t.Row(trunc(rw.unit, 44), fmt.Sprintf("%d", rw.ex), fmt.Sprintf("%d", rw.exit))
+	}
+	fmt.Fprintln(w, t)
 }
 
 func renderHealth(r *types.SystemReport, w io.Writer) {

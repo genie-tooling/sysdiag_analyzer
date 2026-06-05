@@ -4,17 +4,27 @@ package llm
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/config"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/types"
 )
+
+func isClaudeCode(provider string) bool {
+	switch provider {
+	case "claude-code", "claude-cli", "claude":
+		return true
+	}
+	return false
+}
 
 var httpClient = &http.Client{Timeout: 5 * time.Minute}
 
@@ -25,7 +35,8 @@ func Analyze(report *types.SystemReport, cfg config.LLM) *types.LLMAnalysisResul
 		res.Error = "LLM provider not configured ([llm].provider)."
 		return res
 	}
-	if cfg.Model == "" {
+	if cfg.Model == "" && !isClaudeCode(cfg.Provider) {
+		// claude-code may use the CLI's default model, so a model is optional there.
 		res.Error = "LLM model not configured ([llm].model)."
 		return res
 	}
@@ -39,11 +50,17 @@ func Analyze(report *types.SystemReport, cfg config.LLM) *types.LLMAnalysisResul
 	var synth string
 	var pTok, cTok *int
 	var err error
-	switch cfg.Provider {
-	case "ollama":
+	switch {
+	case cfg.Provider == "ollama":
 		synth, pTok, cTok, err = generateOllama(cfg, prompt, temp, maxTok)
-	case "openai", "openai-compatible":
+	case cfg.Provider == "openai" || cfg.Provider == "openai-compatible":
 		synth, pTok, cTok, err = generateOpenAI(cfg, prompt, temp, maxTok)
+	case isClaudeCode(cfg.Provider):
+		var model string
+		synth, model, pTok, cTok, err = generateClaudeCode(cfg, prompt)
+		if model != "" {
+			res.ModelUsed = model
+		}
 	default:
 		res.Error = "unsupported LLM provider: " + cfg.Provider
 		return res
@@ -118,6 +135,55 @@ func generateOpenAI(cfg config.LLM, prompt string, temp float64, maxTok int) (st
 		return "", nil, nil, fmt.Errorf("openai-compatible endpoint returned no content")
 	}
 	return strings.TrimSpace(out.Choices[0].Message.Content), &out.Usage.PromptTokens, &out.Usage.CompletionTokens, nil
+}
+
+// generateClaudeCode runs the local Claude Code CLI headlessly (`claude -p
+// --output-format json`), feeding the prompt on stdin. It uses the user's
+// existing Claude Code auth, so no API key is needed in the config. The CLI
+// binary path can be overridden via [llm].host; the model via [llm].model.
+func generateClaudeCode(cfg config.LLM, prompt string) (synth, model string, pTok, cTok *int, err error) {
+	bin := cfg.Host
+	if bin == "" {
+		bin = "claude"
+	}
+	args := []string{"-p", "--output-format", "json"}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Stdin = strings.NewReader(prompt)
+	out, runErr := cmd.Output()
+	if runErr != nil {
+		if ee, ok := runErr.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+			return "", "", nil, nil, fmt.Errorf("claude CLI: %s", strings.TrimSpace(string(ee.Stderr)))
+		}
+		return "", "", nil, nil, fmt.Errorf("claude CLI (%s): %w", bin, runErr)
+	}
+	var parsed struct {
+		Result  string `json:"result"`
+		IsError bool   `json:"is_error"`
+		Model   string `json:"model"`
+		Usage   struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if jsonErr := json.Unmarshal(out, &parsed); jsonErr != nil {
+		// Tolerate a plain-text response (e.g. a future --output-format default).
+		if s := strings.TrimSpace(string(out)); s != "" {
+			return s, "", nil, nil, nil
+		}
+		return "", "", nil, nil, fmt.Errorf("claude CLI returned no parseable output")
+	}
+	if parsed.IsError {
+		return "", "", nil, nil, fmt.Errorf("claude CLI error: %s", strings.TrimSpace(parsed.Result))
+	}
+	if strings.TrimSpace(parsed.Result) == "" {
+		return "", "", nil, nil, fmt.Errorf("claude CLI returned an empty result")
+	}
+	return strings.TrimSpace(parsed.Result), parsed.Model, &parsed.Usage.InputTokens, &parsed.Usage.OutputTokens, nil
 }
 
 func postJSON(url string, headers map[string]string, body []byte, out any) error {

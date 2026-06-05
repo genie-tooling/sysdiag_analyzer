@@ -3,44 +3,124 @@
 package deps
 
 import (
-	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/systemd"
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/types"
 )
 
-var treeTrim = "●○├└│─ \t"
+// Dependency relation properties fetched per unit (order = precedence; first wins).
+var depPropKeys = []string{
+	"Requires", "Requisite", "Wants", "BindsTo", "Before", "After", "PartOf", "ConsistsOf",
+}
 
-// AnalyzeFailed inspects each failed unit's dependencies and flags problematic ones.
+// RelationProps returns the dependency relation property names to fetch for a
+// unit (so callers can include them in a single systemctl show).
+func RelationProps() []string { return append([]string(nil), depPropKeys...) }
+
+// strongDepTypes mirror Python: their failure/absence can cause the unit to fail.
+var strongDepTypes = map[string]bool{
+	"Requires": true, "ConsistsOf": true, "BindsTo": true,
+	"Requisite": true, "PartOf": true, "Unknown": true,
+}
+
+// isDepProblematic ports modules/dependencies.py:_is_dependency_problematic.
+func isDepProblematic(depType, load, active, sub string) bool {
+	if strongDepTypes[depType] {
+		return active == "failed" || active == "inactive" || sub == "dead" ||
+			load == "not-found" || load == ""
+	}
+	if depType == "Wants" { // weaker: only an outright failure counts
+		return active == "failed"
+	}
+	return false // Before/After are ordering-only
+}
+
+// depMapFromProps extracts dep name -> relation type from a unit's properties.
+func depMapFromProps(kv map[string]string) map[string]string {
+	m := map[string]string{}
+	for _, key := range depPropKeys {
+		for _, name := range strings.Fields(kv[key]) {
+			if name != "" {
+				if _, exists := m[name]; !exists {
+					m[name] = key
+				}
+			}
+		}
+	}
+	return m
+}
+
+// resolveStates returns load/active/sub for each dep, using the known unit map
+// where possible and a single batched `systemctl show` for the rest.
+func resolveStates(names []string, known map[string]types.UnitHealthInfo) map[string]types.UnitHealthInfo {
+	out := map[string]types.UnitHealthInfo{}
+	var missing []string
+	for _, n := range names {
+		if st, ok := known[n]; ok {
+			out[n] = st
+		} else {
+			missing = append(missing, n)
+		}
+	}
+	if len(missing) > 0 {
+		props := systemd.ShowProperties(missing, []string{"LoadState", "ActiveState", "SubState"})
+		for n, kv := range props {
+			out[n] = types.UnitHealthInfo{Name: n, LoadState: kv["LoadState"], ActiveState: kv["ActiveState"], SubState: kv["SubState"]}
+		}
+	}
+	return out
+}
+
+// buildDeps turns a dep map into sorted, state-resolved, problem-flagged DependencyInfos.
+func buildDeps(depMap map[string]string, known map[string]types.UnitHealthInfo) []types.DependencyInfo {
+	names := make([]string, 0, len(depMap))
+	for n := range depMap {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	depStates := resolveStates(names, known)
+	out := make([]types.DependencyInfo, 0, len(names))
+	for _, name := range names {
+		typ := depMap[name]
+		d := types.DependencyInfo{Name: name, Type: typ}
+		if st, ok := depStates[name]; ok {
+			d.CurrentLoadState, d.CurrentActiveState, d.CurrentSubState = st.LoadState, st.ActiveState, st.SubState
+		}
+		if d.CurrentLoadState == "" {
+			d.CurrentLoadState = "not-found"
+		}
+		d.IsProblematic = isDepProblematic(typ, d.CurrentLoadState, d.CurrentActiveState, d.CurrentSubState)
+		out = append(out, d)
+	}
+	return out
+}
+
+// AnalyzeUnit returns the dependency breakdown for a single unit (any state),
+// given that unit's already-fetched properties. Mirrors unit_analyzer.py.
+func AnalyzeUnit(unitName string, unitProps map[string]string, known map[string]types.UnitHealthInfo) *types.FailedUnitDependencyInfo {
+	return &types.FailedUnitDependencyInfo{
+		UnitName:     unitName,
+		Dependencies: buildDeps(depMapFromProps(unitProps), known),
+	}
+}
+
+// AnalyzeFailed inspects each failed unit's dependencies and flags problematic ones,
+// preserving the real relation type (Requires/Wants/After/...) per Python.
 func AnalyzeFailed(failed []types.UnitHealthInfo, states map[string]types.UnitHealthInfo) *types.DependencyAnalysisResult {
 	res := &types.DependencyAnalysisResult{FailedUnitDependencies: []types.FailedUnitDependencyInfo{}}
+	names := make([]string, len(failed))
+	for i, fu := range failed {
+		names[i] = fu.Name
+	}
+	props := systemd.ShowProperties(names, depPropKeys)
 	for _, fu := range failed {
 		info := types.FailedUnitDependencyInfo{UnitName: fu.Name, Dependencies: []types.DependencyInfo{}}
-		out, err := exec.Command("systemctl", "list-dependencies", fu.Name, "--plain", "--no-pager").Output()
-		if err != nil {
-			info.Error = "list-dependencies failed: " + err.Error()
-			res.FailedUnitDependencies = append(res.FailedUnitDependencies, info)
-			continue
-		}
-		seen := map[string]bool{fu.Name: true}
-		for _, line := range strings.Split(string(out), "\n") {
-			name := strings.Trim(line, treeTrim)
-			if name == "" || !strings.Contains(name, ".") || seen[name] {
-				continue
-			}
-			seen[name] = true
-			d := types.DependencyInfo{Name: name, Type: "Requires"} // type not exposed by list-dependencies
-			if st, ok := states[name]; ok {
-				d.CurrentLoadState = st.LoadState
-				d.CurrentActiveState = st.ActiveState
-				d.CurrentSubState = st.SubState
-				d.IsProblematic = st.ActiveState == "failed" || st.LoadState == "not-found"
-			} else {
-				d.IsProblematic = true // unknown / not loaded
-				d.CurrentLoadState = "not-found"
-			}
-			info.Dependencies = append(info.Dependencies, d)
+		if kv, ok := props[fu.Name]; ok {
+			info.Dependencies = buildDeps(depMapFromProps(kv), states)
+		} else {
+			info.Error = "could not fetch dependency properties via systemctl show"
 		}
 		res.FailedUnitDependencies = append(res.FailedUnitDependencies, info)
 	}

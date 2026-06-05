@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	godbus "github.com/coreos/go-systemd/v22/dbus"
@@ -16,6 +17,27 @@ import (
 )
 
 const CgroupBase = "/sys/fs/cgroup"
+
+// UnitLogs returns up to the last n journal lines for a unit (oldest→newest),
+// via journalctl. Mirrors health.py's _get_unit_logs.
+func UnitLogs(unit string, n int) []string {
+	if n <= 0 {
+		n = 20
+	}
+	out, err := exec.Command("journalctl", "-u", unit, "-n", strconv.Itoa(n),
+		"--no-pager", "--output=short-iso").Output()
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, l := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if l == "" || strings.HasPrefix(l, "-- ") { // skip "-- No entries --"/boot markers
+			continue
+		}
+		lines = append(lines, l)
+	}
+	return lines
+}
 
 // ListUnits returns currently-loaded units via the systemd D-Bus API, falling
 // back to `systemctl list-units --output=json` if D-Bus is unavailable.

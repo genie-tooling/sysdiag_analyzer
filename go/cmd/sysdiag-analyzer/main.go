@@ -45,6 +45,10 @@ var (
 	analyzeLLM       bool
 	analyzeFullGraph bool
 	since            string
+	llmModel         string
+	logBoot          int
+	logPriority      int
+	histLimit        int
 	expHost          string
 	expPort          int
 	expInterval      int
@@ -52,6 +56,50 @@ var (
 	topCount         int
 	topInterval      int
 )
+
+// runSingleUnit performs a focused analysis of one unit (analyze-unit),
+// mirroring unit_analyzer.py.
+func runSingleUnit(_ context.Context, unitName string) *types.SingleUnitReport {
+	rep := &types.SingleUnitReport{}
+	propsNeeded := append([]string{"LoadState", "ActiveState", "SubState", "Description",
+		"NRestarts", "Result", "MainPID", "Refused"}, deps.RelationProps()...)
+	props := systemd.ShowProperties([]string{unitName}, propsNeeded)
+	var canonical string
+	var kv map[string]string
+	for id, m := range props {
+		canonical, kv = id, m
+		break
+	}
+	if kv == nil {
+		rep.AnalysisError = fmt.Sprintf("Unit '%s' not found or properties could not be fetched.", unitName)
+		return rep
+	}
+	u := types.UnitHealthInfo{
+		Name: canonical, LoadState: kv["LoadState"], ActiveState: kv["ActiveState"],
+		SubState: kv["SubState"], Description: kv["Description"], Details: kv,
+	}
+	u.IsFailed = u.ActiveState == "failed"
+	u.RecentLogs = systemd.UnitLogs(canonical, 50)
+	rep.UnitInfo = &u
+	if usages := resources.CollectUnitUsage([]types.UnitHealthInfo{u}, map[string]string{}); len(usages) > 0 {
+		rep.ResourceUsage = &usages[0]
+	}
+	rep.DependencyInfo = deps.AnalyzeUnit(canonical, kv, nil)
+	return rep
+}
+
+func emitSingle(rep *types.SingleUnitReport) error {
+	if outputFmt == "json" {
+		b, err := report.JSONSingle(rep)
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(b))
+		return nil
+	}
+	report.SingleUnit(rep, os.Stdout)
+	return nil
+}
 
 // activeServiceSet returns .service units that have a live MainPID (the ML target set).
 func activeServiceSet(units []types.UnitHealthInfo) map[string]bool {
@@ -169,6 +217,9 @@ func main() {
 				r.MemoryLeakAnalysis = &types.MemoryLeakAnalysisResult{SuspectedLeaks: lk, UnitsAnalyzedCount: n}
 			}
 			if analyzeLLM {
+				if llmModel != "" {
+					cfg.LLM.Model = llmModel
+				}
 				r.LLMAnalysis = llm.Analyze(r, cfg.LLM)
 			}
 			if enableEBPF {
@@ -187,7 +238,8 @@ func main() {
 	runCmd.Flags().BoolVar(&analyzeML, "analyze-ml", false, "Statistical anomaly + leak detection (P2).")
 	runCmd.Flags().StringVar(&since, "since", "", "Restrict log analysis to entries since this time (journalctl --since).")
 	runCmd.Flags().BoolVar(&analyzeFullGraph, "analyze-full-graph", false, "Detect dependency cycles in the full graph.")
-	runCmd.Flags().BoolVar(&analyzeLLM, "analyze-llm", false, "LLM synthesis of the report (Ollama / OpenAI-compatible).")
+	runCmd.Flags().BoolVar(&analyzeLLM, "analyze-llm", false, "LLM synthesis of the report (Ollama / OpenAI-compatible / claude-code).")
+	runCmd.Flags().StringVar(&llmModel, "llm-model", "", "Override [llm].model for this run.")
 
 	healthCmd := &cobra.Command{
 		Use:   "analyze-health",
@@ -232,18 +284,29 @@ func main() {
 		Short: "Log analysis only.",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			r := newReport()
-			r.LogAnalysis = logs.Analyze(0, logs.DefaultAnalysisLevel, since)
+			r.LogAnalysis = logs.Analyze(logBoot, logPriority, since)
 			return emit(r)
 		},
 	}
 	logsCmd.Flags().StringVar(&since, "since", "", "Restrict to entries since this time (journalctl --since).")
+	logsCmd.Flags().IntVarP(&logBoot, "boot", "b", 0, "Boot offset (0=current, -1=previous, ...).")
+	logsCmd.Flags().IntVarP(&logPriority, "priority", "p", logs.DefaultAnalysisLevel, "Min syslog priority (0=emerg .. 7=debug).")
+
+	unitCmd := &cobra.Command{
+		Use:   "analyze-unit <unit>",
+		Short: "Focused analysis of a single systemd unit.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return emitSingle(runSingleUnit(cmd.Context(), args[0]))
+		},
+	}
 
 	historyCmd := &cobra.Command{
 		Use:   "show-history",
 		Short: "List saved analysis reports.",
 		RunE: func(_ *cobra.Command, _ []string) error {
 			cfg := config.Load(cfgPath)
-			reports := history.Load(cfg.History.Directory, 0)
+			reports := history.Load(cfg.History.Directory, histLimit)
 			if len(reports) == 0 {
 				fmt.Printf("No history found in %s\n", cfg.History.Directory)
 				return nil
@@ -265,6 +328,7 @@ func main() {
 			return nil
 		},
 	}
+	historyCmd.Flags().IntVarP(&histLimit, "limit", "n", 5, "Number of recent reports to show.")
 
 	topCmd := &cobra.Command{
 		Use:   "top",
@@ -308,7 +372,7 @@ func main() {
 	}
 	configCmd.AddCommand(configShow)
 
-	root.AddCommand(runCmd, healthCmd, resourcesCmd, bootCmd, logsCmd, historyCmd, topCmd, exporterCmd, configCmd)
+	root.AddCommand(runCmd, healthCmd, resourcesCmd, bootCmd, logsCmd, unitCmd, historyCmd, topCmd, exporterCmd, configCmd)
 	root.SetContext(context.Background())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
