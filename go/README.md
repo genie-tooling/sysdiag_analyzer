@@ -18,22 +18,44 @@ deep mode (the statistical detector is the default and covers out-of-the-box use
 Reports use the **same JSON schema** and the exporter the **same metric names** as
 the Python tool, so history and dashboards interoperate.
 
+## Requirements
+
+**Runtime** (the host you run it on):
+- **Linux with systemd on cgroup v2.** `systemctl`, `journalctl`, and `systemd-analyze`
+  must be on `PATH` (used for unit lists, boot timing, logs, dependencies).
+- **Privileges:** system-wide stats work unprivileged; run as **root** for full per-unit
+  cgroup metrics, failed-unit journal logs, and dependency analysis. `--enable-ebpf`
+  **requires root** (or `CAP_BPF`+`CAP_PERFMON`).
+- **eBPF (`--enable-ebpf`):** a **BTF-capable kernel** (`/sys/kernel/btf/vmlinux` present;
+  kernel ≥ 5.8, ≥ 5.11 recommended). No clang/headers needed at runtime.
+- **LLM (`--analyze-llm`):** one of — a running **Ollama**, an **OpenAI-compatible**
+  endpoint, or the **`claude` CLI** on `PATH` (provider `claude-code`, uses your existing
+  Claude Code login; no API key).
+
+**Build** (the host you compile on):
+- **Default binary:** **Go 1.24+** only — `CGO_ENABLED=0`, no system `-dev` libraries.
+- **eBPF binary (`make ebpf`):** also just Go — the bpf2go bindings
+  (`internal/ebpf/tracer_bpf*.{go,o}`) are **committed**, so no clang/bpftool needed.
+- **Regenerating eBPF bindings (`make ebpf-gen`, only when editing `bpf/tracer.c`):**
+  `clang`, `bpftool` (`linux-tools-*`), and `libbpf-dev`.
+  `sudo apt install -y clang bpftool libbpf-dev linux-tools-$(uname -r)`
+
 ## Build
 ```bash
-CGO_ENABLED=0 go build -o sysdiag-analyzer ./cmd/sysdiag-analyzer   # static, ~15 MB
-ldd ./sysdiag-analyzer    # -> "not a dynamic executable"
-go test ./...
+make build                 # = CGO_ENABLED=0 go build  (static, ~15 MB)
+ldd ./sysdiag-analyzer     # -> "not a dynamic executable"
+make test
 ```
-Requires Go 1.24+. Run as **root** for full per-unit / journal data (system-wide
-stats work unprivileged).
 
-### Optional: eBPF process tracing (`--enable-ebpf`)
-The default binary ships an eBPF stub. To enable real tracing you compile the
-CO-RE object once (build-time `clang` + `bpftool`; runtime needs only BTF):
+### eBPF process tracing (`--enable-ebpf`)
+The default binary ships an eBPF stub. The real tracer builds from committed bindings:
 ```bash
-sudo apt install -y clang llvm libbpf-dev linux-tools-common   # or distro equivalent
-go generate ./...                 # bpftool -> vmlinux.h ; bpf2go -> tracer_bpf*.go
-go build -tags ebpf -o sysdiag-analyzer ./cmd/sysdiag-analyzer
+make ebpf                          # build with -tags ebpf (no clang/bpftool needed)
+sudo ./sysdiag-analyzer run --enable-ebpf --no-save   # must run as root
+```
+Only regenerate when you change `bpf/tracer.c` (needs the build deps above):
+```bash
+make ebpf-gen                      # go generate (clang+bpftool+libbpf) then build
 ```
 
 ## Commands
