@@ -46,6 +46,7 @@ var (
 	analyzeLLM       bool
 	analyzeFullGraph bool
 	since            string
+	ebpfDur          time.Duration
 	llmModel         string
 	logBoot          int
 	logPriority      int
@@ -158,6 +159,21 @@ func main() {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			cfg := config.Load(cfgPath)
+
+			// Start eBPF first so its window overlaps the rest of the analysis
+			// (the tracer accumulates in-kernel while we collect everything else).
+			var ebpfSess *ebpf.Session
+			var ebpfErr string
+			ebpfStarted := time.Now()
+			if enableEBPF {
+				if s, err := ebpf.Start(ctx); err == nil {
+					ebpfSess = s
+					defer s.Close()
+				} else {
+					ebpfErr = err.Error()
+				}
+			}
+
 			units, err := systemd.ListUnits(ctx)
 			if err != nil {
 				return fmt.Errorf("listing units: %w", err)
@@ -236,7 +252,20 @@ func main() {
 				r.LLMAnalysis = llm.Analyze(r, cfg.LLM)
 			}
 			if enableEBPF {
-				r.EBPFAnalysis = ebpf.Run(ctx, 5*time.Second)
+				if ebpfSess != nil {
+					// Wait only for whatever window remains after the overlap.
+					if rem := ebpfDur - time.Since(ebpfStarted); rem > 0 {
+						select {
+						case <-ctx.Done():
+						case <-time.After(rem):
+						}
+					}
+					r.EBPFAnalysis = ebpfSess.Snapshot()
+				} else {
+					r.EBPFAnalysis = &types.EBPFAnalysisResult{
+						UnitsWithExecs: map[string]int{}, UnitsWithExits: map[string]int{}, Error: ebpfErr,
+					}
+				}
 			}
 			if !noSave {
 				if err := history.Save(r, cfg.History.Directory, cfg.History.MaxFiles); err != nil {
@@ -248,6 +277,7 @@ func main() {
 	}
 	runCmd.Flags().BoolVar(&noSave, "no-save", false, "Do not save the report to history (P2).")
 	runCmd.Flags().BoolVar(&enableEBPF, "enable-ebpf", false, "Enable eBPF tracing (P5).")
+	runCmd.Flags().DurationVar(&ebpfDur, "ebpf-duration", 3*time.Second, "eBPF aggregation window (overlaps the rest of the analysis).")
 	runCmd.Flags().BoolVar(&analyzeML, "analyze-ml", false, "Statistical anomaly + leak detection (P2).")
 	runCmd.Flags().StringVar(&since, "since", "", "Restrict log analysis to entries since this time (journalctl --since).")
 	runCmd.Flags().BoolVar(&analyzeFullGraph, "analyze-full-graph", false, "Detect dependency cycles in the full graph.")
