@@ -46,6 +46,7 @@ var (
 	analyzeLLM       bool
 	analyzeFullGraph bool
 	since            string
+	showTiming       bool
 	ebpfDur          time.Duration
 	llmModel         string
 	logBoot          int
@@ -174,22 +175,45 @@ func main() {
 				}
 			}
 
+			tList := time.Now()
 			units, err := systemd.ListUnits(ctx)
 			if err != nil {
 				return fmt.Errorf("listing units: %w", err)
 			}
+			listDur := time.Since(tList)
 			r := newReport()
 			// These four are independent and run concurrently. health mutates its
 			// units (Details/flags), so give it a private copy — resources reads the
 			// original list, avoiding a data race on the shared slice.
 			healthUnits := append([]types.UnitHealthInfo(nil), units...)
+			var ph struct{ boot, health, resources, logs time.Duration }
 			var wg sync.WaitGroup
 			wg.Add(4)
-			go func() { defer wg.Done(); r.BootAnalysis = boot.Analyze() }()
-			go func() { defer wg.Done(); r.HealthAnalysis = health.Analyze(ctx, healthUnits) }()
-			go func() { defer wg.Done(); r.ResourceAnalysis = resources.Analyze(ctx, units) }()
-			go func() { defer wg.Done(); r.LogAnalysis = logs.Analyze(0, logs.DefaultAnalysisLevel, since) }()
+			go func() { defer wg.Done(); t := time.Now(); r.BootAnalysis = boot.Analyze(); ph.boot = time.Since(t) }()
+			go func() {
+				defer wg.Done()
+				t := time.Now()
+				r.HealthAnalysis = health.Analyze(ctx, healthUnits)
+				ph.health = time.Since(t)
+			}()
+			go func() {
+				defer wg.Done()
+				t := time.Now()
+				r.ResourceAnalysis = resources.Analyze(ctx, units)
+				ph.resources = time.Since(t)
+			}()
+			go func() {
+				defer wg.Done()
+				t := time.Now()
+				r.LogAnalysis = logs.Analyze(0, logs.DefaultAnalysisLevel, since)
+				ph.logs = time.Since(t)
+			}()
 			wg.Wait()
+			if showTiming {
+				ms := func(d time.Duration) string { return d.Round(time.Millisecond).String() }
+				fmt.Fprintf(os.Stderr, "timing: list-units=%s | parallel: boot=%s health=%s resources=%s logs=%s\n",
+					ms(listDur), ms(ph.boot), ms(ph.health), ms(ph.resources), ms(ph.logs))
+			}
 
 			// healthUnits carries the fetched Details (MainPID, NRestarts, ...).
 			states := make(map[string]types.UnitHealthInfo, len(healthUnits))
@@ -278,6 +302,7 @@ func main() {
 	runCmd.Flags().BoolVar(&noSave, "no-save", false, "Do not save the report to history (P2).")
 	runCmd.Flags().BoolVar(&enableEBPF, "enable-ebpf", false, "Enable eBPF tracing (P5).")
 	runCmd.Flags().DurationVar(&ebpfDur, "ebpf-duration", 3*time.Second, "eBPF aggregation window (overlaps the rest of the analysis).")
+	runCmd.Flags().BoolVar(&showTiming, "timing", false, "Print per-phase wall-clock timing to stderr.")
 	runCmd.Flags().BoolVar(&analyzeML, "analyze-ml", false, "Statistical anomaly + leak detection (P2).")
 	runCmd.Flags().StringVar(&since, "since", "", "Restrict log analysis to entries since this time (journalctl --since).")
 	runCmd.Flags().BoolVar(&analyzeFullGraph, "analyze-full-graph", false, "Detect dependency cycles in the full graph.")
