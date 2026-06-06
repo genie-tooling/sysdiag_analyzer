@@ -19,6 +19,8 @@ type Feature struct {
 	IOWrite    *int64
 	Tasks      *int64
 	MajFault   *int64
+	Pagetables *int64
+	Hugetlb    *int64
 	PSICPU     *float64
 	PSIMem     *float64
 	PSIIO      *float64
@@ -51,8 +53,9 @@ func Extract(reports []*types.SystemReport) []Feature {
 				CPUNsec: u.CPUUsageNsec, MemAnon: u.MemoryAnonBytes,
 				MemCurrent: u.MemoryCurrentByte, IORead: u.IOReadBytes,
 				IOWrite: u.IOWriteBytes, Tasks: u.TasksCurrent,
-				MajFault: u.MemoryPgMajfault,
-				PSICPU:   u.PSICPUPressure, PSIMem: u.PSIMemPressure, PSIIO: u.PSIIOPressure,
+				MajFault:   u.MemoryPgMajfault,
+				Pagetables: u.MemoryPagetables, Hugetlb: u.MemoryHugetlb,
+				PSICPU: u.PSICPUPressure, PSIMem: u.PSIMemPressure, PSIIO: u.PSIIOPressure,
 			})
 		}
 	}

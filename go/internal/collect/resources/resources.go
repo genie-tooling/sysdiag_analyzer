@@ -64,6 +64,7 @@ func SystemUsage() *types.SystemResourceUsage {
 		u.NetIOSentBytes = pi(int64(nio[0].BytesSent))
 		u.NetIORecvBytes = pi(int64(nio[0].BytesRecv))
 	}
+	u.HugepagesBytes, u.HugepagesFreeBytes = meminfoHugepages()
 	if len(errs) > 0 {
 		u.Error = strings.Join(errs, "; ")
 	}
@@ -296,6 +297,12 @@ func readUnitUsage(name, rel string) types.UnitResourceUsage {
 		if v, ok := stat["pgmajfault"]; ok {
 			uu.MemoryPgMajfault = pi(v)
 		}
+		if v, ok := stat["pagetables"]; ok {
+			uu.MemoryPagetables = pi(v)
+		}
+		if v, ok := stat["hugetlb"]; ok {
+			uu.MemoryHugetlb = pi(v)
+		}
 	}
 	if c, ok := systemd.ReadCgroupFile(rel, "io.stat"); ok {
 		uu.IOReadBytes, uu.IOWriteBytes = ParseIOStat(c)
@@ -313,6 +320,37 @@ func readUnitUsage(name, rel string) types.UnitResourceUsage {
 		uu.PSIIOPressure = ParsePressure(c)
 	}
 	return uu
+}
+
+// meminfoHugepages reads the hugepage pool from /proc/meminfo. Hugetlb is the
+// total bytes pinned in hugepages — guest RAM of hugepage-backed VMs lives here
+// and is invisible to cgroup memory.current. nil when no hugepages are reserved.
+func meminfoHugepages() (total, free *int64) {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return nil, nil
+	}
+	var hugetlbKB, freePages, sizeKB int64
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		switch strings.TrimSuffix(f[0], ":") {
+		case "Hugetlb":
+			hugetlbKB, _ = strconv.ParseInt(f[1], 10, 64)
+		case "HugePages_Free":
+			freePages, _ = strconv.ParseInt(f[1], 10, 64)
+		case "Hugepagesize":
+			sizeKB, _ = strconv.ParseInt(f[1], 10, 64)
+		}
+	}
+	if hugetlbKB <= 0 {
+		return nil, nil
+	}
+	t := hugetlbKB * 1024
+	fr := freePages * sizeKB * 1024
+	return &t, &fr
 }
 
 // ParsePressure extracts the "some avg10" stall percentage (0..100) from a

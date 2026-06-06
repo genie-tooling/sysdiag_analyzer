@@ -54,7 +54,11 @@ type SystemResourceUsage struct {
 	DiskIOWriteBytes *int64   `json:"disk_io_write_bytes"`
 	NetIOSentBytes   *int64   `json:"net_io_sent_bytes"`
 	NetIORecvBytes   *int64   `json:"net_io_recv_bytes"`
-	Error            string   `json:"error,omitempty"`
+	// Hugepage pool (Hugetlb) from /proc/meminfo — large VMs back guest RAM with
+	// hugepages, which are NOT counted in any cgroup's memory.current.
+	HugepagesBytes     *int64 `json:"hugepages_bytes,omitempty"`
+	HugepagesFreeBytes *int64 `json:"hugepages_free_bytes,omitempty"`
+	Error              string `json:"error,omitempty"`
 }
 
 // UnitResourceUsage mirrors datatypes.UnitResourceUsage.
@@ -68,7 +72,9 @@ type UnitResourceUsage struct {
 	MemoryHighBytes   *int64 `json:"memory_high_bytes"` // nil = "max"/unset
 	MemoryAnonBytes   *int64 `json:"memory_anon_bytes"`
 	MemoryFileBytes   *int64 `json:"memory_file_bytes"`
-	MemoryPgMajfault  *int64 `json:"memory_pgmajfault"` // cumulative major page faults
+	MemoryPagetables  *int64 `json:"memory_pagetables,omitempty"` // page tables (scale with mapped memory)
+	MemoryHugetlb     *int64 `json:"memory_hugetlb,omitempty"`    // hugetlb charged to the cgroup (if accounted)
+	MemoryPgMajfault  *int64 `json:"memory_pgmajfault"`           // cumulative major page faults
 	IOReadBytes       *int64 `json:"io_read_bytes"`
 	IOWriteBytes      *int64 `json:"io_write_bytes"`
 	TasksCurrent      *int64 `json:"tasks_current"`

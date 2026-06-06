@@ -82,6 +82,14 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		emitProblem(ch, h.ProblematicTimers, "problematic_timer")
 	}
 	if ra := r.ResourceAnalysis; ra != nil {
+		if su := ra.SystemUsage; su != nil {
+			if su.HugepagesBytes != nil {
+				ch <- metric(prometheus.GaugeValue, "hugepages_bytes", "Total bytes in the hugepage pool (Hugetlb; VM guest RAM lives here, off-cgroup).", float64(*su.HugepagesBytes))
+			}
+			if su.HugepagesFreeBytes != nil {
+				ch <- metric(prometheus.GaugeValue, "hugepages_free_bytes", "Free bytes in the hugepage pool.", float64(*su.HugepagesFreeBytes))
+			}
+		}
 		for _, g := range ra.ChildProcessGroups {
 			if g.AggregatedMemoryBytes != nil {
 				ch <- metric(prometheus.GaugeValue, "child_process_group_memory_bytes", "Child process group RSS.", float64(*g.AggregatedMemoryBytes), "parent_unit", g.ParentUnit, "command_name", g.CommandName)
@@ -115,6 +123,12 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			}
 			if u.MemoryPgMajfault != nil {
 				ch <- metric(prometheus.CounterValue, "unit_pgmajfault_total", "Unit cumulative major page faults (thrash signal; rate() in PromQL).", float64(*u.MemoryPgMajfault), "unit", u.Name)
+			}
+			if u.MemoryPagetables != nil {
+				ch <- metric(prometheus.GaugeValue, "unit_memory_pagetables_bytes", "Unit page-table memory (scales with mapped memory).", float64(*u.MemoryPagetables), "unit", u.Name)
+			}
+			if u.MemoryHugetlb != nil {
+				ch <- metric(prometheus.GaugeValue, "unit_memory_hugetlb_bytes", "Unit hugetlb memory charged to the cgroup.", float64(*u.MemoryHugetlb), "unit", u.Name)
 			}
 			if u.PSIMemPressure != nil {
 				ch <- metric(prometheus.GaugeValue, "unit_memory_pressure_ratio", "Unit memory PSI: % of the last 10s with a task stalled on memory.", *u.PSIMemPressure, "unit", u.Name)

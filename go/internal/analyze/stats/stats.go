@@ -159,6 +159,8 @@ func buildSeries(samples []features.Feature) map[string][]*float64 {
 	}
 	return map[string][]*float64{
 		"mem_current_bytes": gauge(func(f features.Feature) *int64 { return f.MemCurrent }),
+		"mem_pagetables":    gauge(func(f features.Feature) *int64 { return f.Pagetables }),
+		"mem_hugetlb":       gauge(func(f features.Feature) *int64 { return f.Hugetlb }),
 		"tasks_current":     gauge(func(f features.Feature) *int64 { return f.Tasks }),
 		"cpu_usage_rate":    rate(func(f features.Feature) *int64 { return f.CPUNsec }),
 		"io_read_rate":      rate(func(f features.Feature) *int64 { return f.IORead }),

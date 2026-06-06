@@ -234,8 +234,16 @@ func Text(r *types.SystemReport, w io.Writer) {
 
 	if r.ResourceAnalysis != nil && r.ResourceAnalysis.SystemUsage != nil {
 		su := r.ResourceAnalysis.SystemUsage
-		fmt.Fprintf(w, "%s  CPU %s   Mem %s   Swap %s\n",
+		line := fmt.Sprintf("%s  CPU %s   Mem %s   Swap %s",
 			ui.CyanS.Render("system"), pctStr(su.CPUPercent), pctStr(su.MemPercent), pctStr(su.SwapPercent))
+		if su.HugepagesBytes != nil && *su.HugepagesBytes > 0 {
+			hp := humanBytes(*su.HugepagesBytes)
+			if su.HugepagesFreeBytes != nil {
+				hp += fmt.Sprintf(" (%s free)", humanBytes(*su.HugepagesFreeBytes))
+			}
+			line += "   " + lipgloss.NewStyle().Bold(true).Foreground(ui.Accent).Render("Hugepages "+hp)
+		}
+		fmt.Fprintln(w, line)
 	}
 	if b := r.BootAnalysis; b != nil && b.Times != nil && b.Times.Total != "" {
 		fmt.Fprintf(w, "%s    total %s   %s\n",

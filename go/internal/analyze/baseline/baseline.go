@@ -98,6 +98,8 @@ type metricDef struct {
 var metrics = []metricDef{
 	{"mem_current_bytes", false, func(u types.UnitResourceUsage) *int64 { return u.MemoryCurrentByte }},
 	{"mem_anon_bytes", false, func(u types.UnitResourceUsage) *int64 { return u.MemoryAnonBytes }},
+	{"mem_pagetables", false, func(u types.UnitResourceUsage) *int64 { return u.MemoryPagetables }},
+	{"mem_hugetlb", false, func(u types.UnitResourceUsage) *int64 { return u.MemoryHugetlb }},
 	{"tasks_current", false, func(u types.UnitResourceUsage) *int64 { return u.TasksCurrent }},
 	{"cpu_usage_rate", true, func(u types.UnitResourceUsage) *int64 { return u.CPUUsageNsec }},
 	{"io_read_rate", true, func(u types.UnitResourceUsage) *int64 { return u.IOReadBytes }},
