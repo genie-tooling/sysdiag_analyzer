@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/genie-tooling/sysdiag-analyzer-go/internal/types"
 )
@@ -44,9 +45,13 @@ func Analyze() *types.BootAnalysisResult {
 		Blame:         []types.BootBlameItem{},
 		CriticalChain: []types.CriticalChainItem{},
 	}
-	res.Times = parseTimes()
-	res.Blame, res.BlameError = parseBlame()
-	res.CriticalChain, res.CriticalChainError = parseCriticalChain()
+	// The three systemd-analyze subprocesses are independent — run concurrently.
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() { defer wg.Done(); res.Times = parseTimes() }()
+	go func() { defer wg.Done(); res.Blame, res.BlameError = parseBlame() }()
+	go func() { defer wg.Done(); res.CriticalChain, res.CriticalChainError = parseCriticalChain() }()
+	wg.Wait()
 	return res
 }
 

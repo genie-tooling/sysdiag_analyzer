@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -162,13 +163,21 @@ func main() {
 				return fmt.Errorf("listing units: %w", err)
 			}
 			r := newReport()
-			r.BootAnalysis = boot.Analyze()
-			r.HealthAnalysis = health.Analyze(ctx, units) // populates unit Details (MainPID, NRestarts)
-			r.ResourceAnalysis = resources.Analyze(ctx, units)
-			r.LogAnalysis = logs.Analyze(0, logs.DefaultAnalysisLevel, since)
+			// These four are independent and run concurrently. health mutates its
+			// units (Details/flags), so give it a private copy — resources reads the
+			// original list, avoiding a data race on the shared slice.
+			healthUnits := append([]types.UnitHealthInfo(nil), units...)
+			var wg sync.WaitGroup
+			wg.Add(4)
+			go func() { defer wg.Done(); r.BootAnalysis = boot.Analyze() }()
+			go func() { defer wg.Done(); r.HealthAnalysis = health.Analyze(ctx, healthUnits) }()
+			go func() { defer wg.Done(); r.ResourceAnalysis = resources.Analyze(ctx, units) }()
+			go func() { defer wg.Done(); r.LogAnalysis = logs.Analyze(0, logs.DefaultAnalysisLevel, since) }()
+			wg.Wait()
 
-			states := make(map[string]types.UnitHealthInfo, len(units))
-			for _, u := range units {
+			// healthUnits carries the fetched Details (MainPID, NRestarts, ...).
+			states := make(map[string]types.UnitHealthInfo, len(healthUnits))
+			for _, u := range healthUnits {
 				states[u.Name] = u
 			}
 			if len(r.HealthAnalysis.FailedUnits) > 0 {
@@ -184,7 +193,7 @@ func main() {
 			if analyzeML {
 				reports := append(history.Load(cfg.History.Directory, cfg.Models.HistoryWindow), r)
 				feats := features.Extract(reports)
-				active := activeServiceSet(units)
+				active := activeServiceSet(healthUnits)
 				var usage []types.UnitResourceUsage
 				if r.ResourceAnalysis != nil {
 					usage = r.ResourceAnalysis.UnitUsage

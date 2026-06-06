@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -155,13 +156,35 @@ func Analyze(_ context.Context, units []types.UnitHealthInfo) *types.ResourceAna
 	}
 	paths := systemd.ResolveCgroupPaths(names)
 
+	// Child-process scan (one /proc walk) runs concurrently with the per-unit
+	// cgroup reads, which are themselves parallelized (bounded) since they're
+	// independent file reads.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); res.ChildProcessGroups = scanChildGroups(units) }()
+
+	type job struct{ name, rel string }
+	var jobs []job
 	for _, u := range units {
 		if rel, ok := paths[u.Name]; ok {
-			res.UnitUsage = append(res.UnitUsage, readUnitUsage(u.Name, rel))
+			jobs = append(jobs, job{u.Name, rel})
 		}
 	}
-
-	res.ChildProcessGroups = scanChildGroups(units)
+	out := make([]types.UnitResourceUsage, len(jobs))
+	sem := make(chan struct{}, 16)
+	var rwg sync.WaitGroup
+	for i, j := range jobs {
+		rwg.Add(1)
+		sem <- struct{}{}
+		go func(i int, j job) {
+			defer rwg.Done()
+			defer func() { <-sem }()
+			out[i] = readUnitUsage(j.name, j.rel)
+		}(i, j)
+	}
+	rwg.Wait()
+	res.UnitUsage = out
+	wg.Wait()
 
 	// Rank actual consumers, not the slice nesting chain that repeats the same
 	// usage up the cgroup tree (full UnitUsage is kept intact for JSON).
@@ -354,6 +377,11 @@ func scanChildGroups(units []types.UnitHealthInfo) []types.ChildProcessGroupUsag
 	}
 	props := systemd.ShowProperties(services, []string{"MainPID"})
 
+	// Read /proc ONCE into a pid table + ppid->children adjacency, then walk each
+	// service's tree in memory. (gopsutil's Children() re-scans all of /proc per
+	// node, which was O(services x procs) and dominated `run`'s wall-clock.)
+	infos, children := processTable()
+
 	type acc struct {
 		unit, cmd string
 		pids      []int
@@ -366,24 +394,20 @@ func scanChildGroups(units []types.UnitHealthInfo) []types.ChildProcessGroupUsag
 		if err != nil || pid <= 0 {
 			continue
 		}
-		for _, cp := range descendants(int32(pid)) {
-			name, err := cp.Name()
-			if err != nil || name == "" {
+		for _, cpid := range descendantPids(int32(pid), children) {
+			info := infos[cpid]
+			if info == nil || info.comm == "" {
 				continue
 			}
-			key := unit + "\x00" + name
+			key := unit + "\x00" + info.comm
 			a := groups[key]
 			if a == nil {
-				a = &acc{unit: unit, cmd: name}
+				a = &acc{unit: unit, cmd: info.comm}
 				groups[key] = a
 			}
-			a.pids = append(a.pids, int(cp.Pid))
-			if mi, err := cp.MemoryInfo(); err == nil && mi != nil {
-				a.mem += int64(mi.RSS)
-			}
-			if t, err := cp.Times(); err == nil && t != nil {
-				a.cpu += t.User + t.System
-			}
+			a.pids = append(a.pids, int(cpid))
+			a.mem += info.rss
+			a.cpu += info.cpu
 		}
 	}
 
@@ -444,29 +468,76 @@ func CgroupFDCount(rel string) *int {
 }
 
 // descendants returns all recursive child processes of pid (excluding pid itself).
-func descendants(pid int32) []*process.Process {
-	root, err := process.NewProcess(pid)
+type pinfo struct {
+	ppid int32
+	comm string
+	rss  int64
+	cpu  float64
+}
+
+// processTable reads every process once, returning per-PID info and a
+// ppid->children adjacency map. One /proc walk total (vs gopsutil Children()'s
+// per-node rescan).
+func processTable() (map[int32]*pinfo, map[int32][]int32) {
+	procs, err := process.Processes()
 	if err != nil {
-		return nil
+		return map[int32]*pinfo{}, map[int32][]int32{}
 	}
-	var out []*process.Process
+	// Gather each process's fields concurrently (gopsutil does several /proc
+	// reads per process; doing them serially over hundreds of PIDs dominated).
+	type rec struct {
+		pid int32
+		pi  *pinfo
+	}
+	recs := make([]rec, len(procs))
+	sem := make(chan struct{}, 16)
+	var wg sync.WaitGroup
+	for i, p := range procs {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, p *process.Process) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			pi := &pinfo{}
+			pi.ppid, _ = p.Ppid()
+			pi.comm, _ = p.Name()
+			if mi, err := p.MemoryInfo(); err == nil && mi != nil {
+				pi.rss = int64(mi.RSS)
+			}
+			if t, err := p.Times(); err == nil && t != nil {
+				pi.cpu = t.User + t.System
+			}
+			recs[i] = rec{p.Pid, pi}
+		}(i, p)
+	}
+	wg.Wait()
+
+	infos := make(map[int32]*pinfo, len(recs))
+	children := make(map[int32][]int32, len(recs))
+	for _, r := range recs {
+		if r.pi == nil {
+			continue
+		}
+		infos[r.pid] = r.pi
+		children[r.pi.ppid] = append(children[r.pi.ppid], r.pid)
+	}
+	return infos, children
+}
+
+// descendantPids returns all PIDs below root (exclusive) via the adjacency map.
+func descendantPids(root int32, children map[int32][]int32) []int32 {
+	var out []int32
 	seen := map[int32]bool{}
-	queue := []*process.Process{root}
+	queue := append([]int32(nil), children[root]...)
 	for len(queue) > 0 {
 		p := queue[0]
 		queue = queue[1:]
-		children, err := p.Children()
-		if err != nil {
+		if seen[p] {
 			continue
 		}
-		for _, c := range children {
-			if seen[c.Pid] {
-				continue
-			}
-			seen[c.Pid] = true
-			out = append(out, c)
-			queue = append(queue, c)
-		}
+		seen[p] = true
+		out = append(out, p)
+		queue = append(queue, children[p]...)
 	}
 	return out
 }

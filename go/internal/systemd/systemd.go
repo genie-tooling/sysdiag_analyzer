@@ -5,6 +5,7 @@ package systemd
 import (
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,13 +121,40 @@ func ShowProperties(units, props []string) map[string]map[string]string {
 	return result
 }
 
-// ResolveCgroupPaths returns relative cgroup paths (leading slash stripped) per
-// unit; empty/unknown -> absent. Batched, no per-unit DBus.
+var cgroupUnitSuffixes = []string{
+	".service", ".scope", ".socket", ".target", ".mount", ".swap", ".slice", ".timer", ".path",
+}
+
+// CgroupPathsFS walks /sys/fs/cgroup once and maps each unit name to its
+// relative cgroup path. systemd only keeps a cgroup directory for *active*
+// units, so this is both complete and far cheaper than `systemctl show
+// ControlGroup` over every unit (a filesystem walk vs. a per-unit manager query).
+func CgroupPathsFS() map[string]string {
+	out := map[string]string{}
+	_ = filepath.WalkDir(CgroupBase, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		for _, suf := range cgroupUnitSuffixes {
+			if strings.HasSuffix(name, suf) {
+				out[name] = strings.TrimPrefix(strings.TrimPrefix(path, CgroupBase), "/")
+				break
+			}
+		}
+		return nil
+	})
+	return out
+}
+
+// ResolveCgroupPaths returns relative cgroup paths (leading slash stripped) for
+// the given units; absent if the unit has no cgroup (e.g. inactive).
 func ResolveCgroupPaths(units []string) map[string]string {
-	paths := map[string]string{}
-	for unit, kv := range ShowProperties(units, []string{"ControlGroup"}) {
-		if rel := strings.TrimLeft(kv["ControlGroup"], "/"); rel != "" {
-			paths[unit] = rel
+	all := CgroupPathsFS()
+	paths := make(map[string]string, len(units))
+	for _, u := range units {
+		if rel, ok := all[u]; ok {
+			paths[u] = rel
 		}
 	}
 	return paths
